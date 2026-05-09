@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>64 Player Split Bracket - Compact Line Style</title>
+  <style>
+    body {
+      margin: 0;
+      background: #050505;
+      color: white;
+      font-family: Arial, sans-serif;
+      overflow: auto;
+    }
+
+    .bracket {
+      position: relative;
+      width: 1550px;
+      height: 1000px;
+      margin: 20px;
+    }
+
+    svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    path {
+      fill: none;
+      stroke: #d7d7d7;
+      stroke-width: 1;
+      shape-rendering: crispEdges;
+    }
+
+    .slot {
+      position: absolute;
+      width: 95px;
+      height: 18px;
+      z-index: 2;
+    }
+
+    .name {
+      position: absolute;
+      left: 3px;
+      bottom: 4px;
+      font-size: 9px;
+      white-space: nowrap;
+      color: #f2f2f2;
+      text-shadow: 0 1px 2px black;
+    }
+
+    .round-label {
+      position: absolute;
+      width: 95px;
+      text-align: center;
+      color: #777;
+      font-size: 10px;
+      top: 0;
+    }
+
+    .champion {
+    position: absolute;
+    width: 130px;
+    height: 22px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: bold;
+    color: white;
+    border-bottom: 1.5px solid #ffffff;
+    z-index: 2;
+    }
+
+    .final-label {
+    position: absolute;
+    width: 130px;
+    text-align: center;
+    font-size: 11px;
+    color: #aaa;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="bracket" id="bracket">
+  <svg id="lines"></svg>
+
+  <div class="final-label" id="final-label">GRAND FINAL</div>
+  <div class="champion" id="champion">Champion</div>
+</div>
+
+<script>
+
+const bracketData = {{ bracket_data | tojson }};
+console.log("bracketData:", bracketData);
+
+const bracket = document.getElementById("bracket");
+const svg = document.getElementById("lines");
+const champion = document.getElementById("champion");
+const finalLabel = document.getElementById("final-label");
+
+const SLOT_W = 52;
+const SLOT_H = 18;
+
+const START_Y = 35;
+const BASE_GAP = 20;
+
+const BRACKET_CENTER_Y = START_Y + ((32 - 1) / 2) * BASE_GAP + SLOT_H;
+
+champion.style.top = (BRACKET_CENTER_Y - champion.offsetHeight) + "px";
+finalLabel.style.top = (BRACKET_CENTER_Y - 65) + "px";
+
+const leftXs  = [30, 115, 200, 285, 370, 455];
+const rightXs = [1095, 1010, 925, 840, 755, 670];
+
+const FINAL_W = 130;
+
+const leftFinalLineEnd = leftXs[5] + SLOT_W;
+const rightFinalLineEnd = rightXs[5];
+
+const FINAL_CENTER_X = (leftFinalLineEnd + rightFinalLineEnd) / 2;
+
+champion.style.left = (FINAL_CENTER_X - FINAL_W / 2) + "px";
+finalLabel.style.left = (FINAL_CENTER_X - FINAL_W / 2) + "px";
+
+const rounds = [32, 16, 8, 4, 2, 1];
+
+function createSlot(id, x, y, name) {
+  const div = document.createElement("div");
+  div.className = "slot";
+  div.id = id;
+  div.style.left = x + "px";
+  div.style.top = y + "px";
+
+  div.innerHTML = `
+    <div class="name">${name}</div>
+  `;
+
+  bracket.appendChild(div);
+}
+
+function createLabel(text, x) {
+  const label = document.createElement("div");
+  label.className = "round-label";
+  label.style.left = x + "px";
+  label.textContent = text;
+  bracket.appendChild(label);
+}
+
+function slotPoint(id, side) {
+  const el = document.getElementById(id);
+
+  return {
+    x: side === "left" ? el.offsetLeft + SLOT_W : el.offsetLeft,
+    y: el.offsetTop + SLOT_H
+  };
+}
+
+function drawPath(points) {
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+
+  let d = `M ${points[0].x} ${points[0].y}`;
+
+  for (let i = 1; i < points.length; i++) {
+    d += ` L ${points[i].x} ${points[i].y}`;
+  }
+
+  path.setAttribute("d", d);
+  svg.appendChild(path);
+}
+
+function slotY(roundIndex, slotIndex) {
+  const groupSize = Math.pow(2, roundIndex);
+  const firstSeedIndex = slotIndex * groupSize;
+  const middleSeedIndex = firstSeedIndex + (groupSize - 1) / 2;
+
+  const lineY = START_Y + middleSeedIndex * BASE_GAP + SLOT_H;
+
+  return lineY - SLOT_H;
+}
+
+function drawMatchConnector(topId, bottomId, nextId, side) {
+  const top = slotPoint(topId, side);
+  const bottom = slotPoint(bottomId, side);
+  const next = slotPoint(nextId, side);
+
+  const topEl = document.getElementById(topId);
+  const bottomEl = document.getElementById(bottomId);
+
+  const topStartX = side === "left"
+    ? topEl.offsetLeft
+    : topEl.offsetLeft + SLOT_W;
+
+  const bottomStartX = side === "left"
+    ? bottomEl.offsetLeft
+    : bottomEl.offsetLeft + SLOT_W;
+
+  const jointX = side === "left"
+    ? top.x + 18
+    : top.x - 18;
+
+  drawPath([
+    { x: topStartX, y: top.y },
+    { x: jointX, y: top.y },
+    { x: jointX, y: bottom.y },
+    { x: bottomStartX, y: bottom.y }
+  ]);
+
+  drawPath([
+    { x: jointX, y: next.y },
+    { x: next.x, y: next.y }
+  ]);
+}
+
+function drawFinalConnector(fromId, side) {
+  const from = slotPoint(fromId, side);
+
+  const champY = BRACKET_CENTER_Y;
+
+  const champX = side === "left"
+    ? champion.offsetLeft
+    : champion.offsetLeft + champion.offsetWidth;
+
+  const jointX = side === "left"
+    ? from.x + 24
+    : from.x - 24;
+
+  drawPath([
+    { x: from.x, y: from.y },
+    { x: jointX, y: from.y },
+    { x: jointX, y: champY },
+    { x: champX, y: champY }
+  ]);
+}
+
+function buildSide(side, xs, players) {
+  const prefix = side === "left" ? "L" : "R";
+
+  ["R1", "R2", "R3", "QF", "SF", "Final"].forEach((label, i) => {
+    createLabel(`${side.toUpperCase()} ${label}`, xs[i]);
+  });
+
+  for (let r = 0; r < rounds.length; r++) {
+    for (let s = 0; s < rounds[r]; s++) {
+      const id = `${prefix}-${r}-${s}`;
+      const x = xs[r];
+      const y = slotY(r, s);
+
+      const name = r === 0
+      ? players[s]
+      : "Winner";
+
+      createSlot(id, x, y, name);
+    }
+  }
+
+  for (let r = 0; r < rounds.length - 1; r++) {
+    for (let s = 0; s < rounds[r]; s += 2) {
+      drawMatchConnector(
+        `${prefix}-${r}-${s}`,
+        `${prefix}-${r}-${s + 1}`,
+        `${prefix}-${r + 1}-${s / 2}`,
+        side
+      );
+    }
+  }
+}
+
+console.log("buildSide type:", typeof buildSide);
+console.log("bracket element:", bracket);
+console.log("left players:", bracketData.left.length);
+
+try {
+  console.log("building bracket...");
+
+  buildSide("left", leftXs, bracketData.left);
+  buildSide("right", rightXs, bracketData.right);
+
+  console.log("slots after build:", document.querySelectorAll(".slot").length);
+
+  drawFinalConnector("L-5-0", "left");
+  drawFinalConnector("R-5-0", "right");
+
+  console.log("bracket finished");
+} catch (err) {
+  console.error("Bracket render failed:", err);
+}
+
+</script>
+
+</body>
+</html>
