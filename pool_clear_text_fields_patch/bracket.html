@@ -115,8 +115,6 @@
 const activeMatchIds = new Set();
 const MAX_ACTIVE_MATCHES = 3;
 const bracketData = {{ bracket_data | tojson }};
-let currentRevision = Number(bracketData.revision || 0);
-let saveQueue = Promise.resolve();
 console.log("bracketData:", bracketData);
 
 const bracket = document.getElementById("bracket");
@@ -124,7 +122,6 @@ const svg = document.getElementById("lines");
 const winners = {};
 const champion = document.getElementById("champion");
 const finalLabel = document.getElementById("final-label");
-champion.textContent = bracketData.champion || "Champion";
 const undoStack = [];
 
 const SLOT_W = 52;
@@ -173,7 +170,7 @@ function createSlot(id, x, y, name) {
   bracket.appendChild(div);
 }
 
-function collectBracketState() {
+function saveBracketState() {
   const firstRound = [];
 
   for (let i = 0; i < 32; i++) {
@@ -190,54 +187,20 @@ function collectBracketState() {
     left: firstRound.slice(0, 32),
     right: firstRound.slice(32, 64),
     advancements: {},
-    active_matches: [...activeMatchIds],
-    champion: champion.textContent || "Champion",
-    revision: currentRevision
+    active_matches: [...activeMatchIds]
   };
 
   document.querySelectorAll(".slot").forEach(slot => {
-    const name = slot.dataset.name || "";
-    if (name) {
-      state.advancements[slot.id] = name;
-    }
+    state.advancements[slot.id] = slot.dataset.name || "";
   });
 
-  return state;
-}
-
-function saveBracketState() {
-  const state = collectBracketState();
-
-  saveQueue = saveQueue.then(() => {
-    state.revision = currentRevision;
-
-    return fetch("/save_bracket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(state)
-    });
-  }).then(async response => {
-    const data = await response.json().catch(() => ({}));
-
-    if (response.status === 409) {
-      alert("This bracket was changed somewhere else. The page will reload with the latest saved version.");
-      window.location.reload();
-      return;
-    }
-
-    if (!response.ok || !data.success) {
-      console.error("Save failed:", data.error || response.statusText);
-      return;
-    }
-
-    currentRevision = Number(data.revision || currentRevision);
-  }).catch(err => {
-    console.error("Save request failed:", err);
+  fetch("/save_bracket", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(state)
   });
-
-  return saveQueue;
 }
 
 function markActiveMatches() {
@@ -388,7 +351,6 @@ function advanceWinner(slotId) {
     });
 
     champion.textContent = winnerName;
-    saveBracketState();
     return;
   }
 
