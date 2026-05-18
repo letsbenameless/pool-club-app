@@ -4,100 +4,31 @@ from memberlist import members
 import json
 import os
 import random
-import threading
 
 
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_FILE = os.path.join(BASE_DIR, "bracket_state.json")
-STATE_LOCK = threading.Lock()
-
-
-def empty_state():
-    return {
-        "left": [""] * 32,
-        "right": [""] * 32,
-        "advancements": {},
-        "active_matches": [],
-        "champion": "Champion",
-        "revision": 0,
-    }
-
-
-def normalize_state(state):
-    """Keep the saved JSON shape stable even if old/partial data is loaded."""
-    base = empty_state()
-
-    if not isinstance(state, dict):
-        return base
-
-    left = state.get("left", [])
-    right = state.get("right", [])
-
-    if not isinstance(left, list):
-        left = []
-    if not isinstance(right, list):
-        right = []
-
-    base["left"] = (left + [""] * 32)[:32]
-    base["right"] = (right + [""] * 32)[:32]
-
-    advancements = state.get("advancements", {})
-    base["advancements"] = advancements if isinstance(advancements, dict) else {}
-
-    active_matches = state.get("active_matches", [])
-    base["active_matches"] = active_matches if isinstance(active_matches, list) else []
-
-    champion = state.get("champion", "Champion")
-    base["champion"] = champion if isinstance(champion, str) and champion else "Champion"
-
-    try:
-        base["revision"] = int(state.get("revision", 0))
-    except (TypeError, ValueError):
-        base["revision"] = 0
-
-    return base
-
-
-def load_state_unlocked():
-    if not os.path.exists(STATE_FILE):
-        return empty_state()
-
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return normalize_state(json.load(f))
-    except (json.JSONDecodeError, OSError):
-        return empty_state()
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bracket_state.json")
 
 
 def load_state():
-    with STATE_LOCK:
-        return load_state_unlocked()
+    if not os.path.exists(STATE_FILE):
+        return None
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return None
 
 
-def save_state_unlocked(state):
-    state = normalize_state(state)
+def save_state(state):
     temp_file = STATE_FILE + ".tmp"
 
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
     os.replace(temp_file, STATE_FILE)
-    return state
-
-
-def save_new_revision_unlocked(state):
-    old_state = load_state_unlocked()
-    state = normalize_state(state)
-    state["revision"] = old_state.get("revision", 0) + 1
-    return save_state_unlocked(state)
-
-
-def save_new_revision(state):
-    with STATE_LOCK:
-        return save_new_revision_unlocked(state)
-
 
 def shorten_name(full_name, buyback=False):
     parts = full_name.strip().split()
@@ -126,47 +57,94 @@ def pad_to_64(players):
     return players + [""] * (64 - len(players))
 
 
-def add_players_to_empty_slots(state, players_to_add):
-    """
-    Add players to empty first-round slots only.
-    Existing first-round names, advancements, active matches, and champion are preserved.
-    """
-    state = normalize_state(state)
-    first_round = state["left"] + state["right"]
-
-    used_names = {
-        name.strip().lower()
-        for name in first_round + list(state["advancements"].values())
-        if isinstance(name, str) and name.strip()
+def empty_state():
+    return {
+        "left": [""] * 32,
+        "right": [""] * 32,
+        "advancements": {},
+        "active_matches": [],
+        "replacement_slots": [],
+        "counts": {
+            "late_players": 0,
+            "buybacks": 0
+        }
     }
 
-    clean_players = []
-    for name in players_to_add:
-        key = name.strip().lower()
-        if key and key not in used_names:
-            clean_players.append(name)
-            used_names.add(key)
 
-    empty_indexes = []
+def normalize_state(state):
+    if not state:
+        return empty_state()
 
+    state.setdefault("left", [""] * 32)
+    state.setdefault("right", [""] * 32)
+    state.setdefault("advancements", {})
+    state.setdefault("active_matches", [])
+    state.setdefault("replacement_slots", [])
+    state.setdefault("counts", {})
+    state["counts"].setdefault("late_players", 0)
+    state["counts"].setdefault("buybacks", 0)
+
+    return state
+
+
+def get_register_counts():
+    state = normalize_state(load_state() or empty_state())
+    all_slots = state.get("left", []) + state.get("right", [])
+
+    return {
+        "total_players": sum(1 for name in all_slots if name.strip()),
+        "late_players": state.get("counts", {}).get("late_players", 0),
+        "buybacks": state.get("counts", {}).get("buybacks", 0),
+    }
+
+
+def slot_parts_from_global_index(index):
+    side = "L" if index < 32 else "R"
+    slot_index = index if index < 32 else index - 32
+    return side, slot_index, f"{side}-0-{slot_index}"
+
+
+def is_first_round_slot_empty(state, index):
+    first_round = state["left"] + state["right"]
+    side, slot_index, slot_id = slot_parts_from_global_index(index)
+    current_name = state.get("advancements", {}).get(slot_id, first_round[index])
+    return not str(current_name or "").strip()
+
+
+def add_players_to_empty_slots(state, players_to_add):
+    first_round = state["left"] + state["right"]
+
+    state.setdefault("advancements", {})
+    state.setdefault("replacement_slots", [])
+
+    preferred_indexes = []
+    for index in state.get("replacement_slots", []):
+        if isinstance(index, int) and 0 <= index < 64 and is_first_round_slot_empty(state, index):
+            if index not in preferred_indexes:
+                preferred_indexes.append(index)
+
+    normal_empty_indexes = []
     for i in range(64):
-        side = "L" if i < 32 else "R"
-        slot_index = i if i < 32 else i - 32
-        slot_id = f"{side}-0-{slot_index}"
+        if i in preferred_indexes:
+            continue
 
-        current_name = state["advancements"].get(slot_id, first_round[i])
+        if is_first_round_slot_empty(state, i):
+            normal_empty_indexes.append(i)
 
-        if not current_name:
-            empty_indexes.append(i)
+    empty_indexes = preferred_indexes + normal_empty_indexes
+    used_indexes = []
 
-    for name, index in zip(clean_players, empty_indexes):
+    for name, index in zip(players_to_add, empty_indexes):
         first_round[index] = name
 
-        side = "L" if index < 32 else "R"
-        slot_index = index if index < 32 else index - 32
-        slot_id = f"{side}-0-{slot_index}"
-
+        side, slot_index, slot_id = slot_parts_from_global_index(index)
         state["advancements"][slot_id] = name
+        used_indexes.append(index)
+
+    state["replacement_slots"] = [
+        index for index in state.get("replacement_slots", [])
+        if index not in used_indexes and is_first_round_slot_empty(state, index)
+    ]
 
     state["left"] = first_round[:32]
     state["right"] = first_round[32:64]
@@ -174,12 +152,59 @@ def add_players_to_empty_slots(state, players_to_add):
     return state
 
 
+def remove_first_round_player_from_state(state, slot_id):
+    parts = slot_id.split("-")
+
+    if len(parts) != 3:
+        return False, "Invalid slot id"
+
+    side, round_index, slot_index_text = parts
+
+    if side not in {"L", "R"} or round_index != "0":
+        return False, "Only first-round players can be removed"
+
+    try:
+        slot_index = int(slot_index_text)
+    except ValueError:
+        return False, "Invalid slot index"
+
+    if not 0 <= slot_index < 32:
+        return False, "Slot index out of range"
+
+    global_index = slot_index if side == "L" else slot_index + 32
+    first_round = state["left"] + state["right"]
+
+    existing_name = state.get("advancements", {}).get(slot_id, first_round[global_index])
+
+    if not str(existing_name or "").strip():
+        return False, "That first-round slot is already empty"
+
+    first_round[global_index] = ""
+    state["left"] = first_round[:32]
+    state["right"] = first_round[32:64]
+
+    state.setdefault("advancements", {})
+    state["advancements"][slot_id] = ""
+
+    state.setdefault("replacement_slots", [])
+    if global_index not in state["replacement_slots"]:
+        state["replacement_slots"].append(global_index)
+
+    # If this removed player had already been copied into later rounds, leave those
+    # results alone. This keeps right-click removal safe for fixing first-round
+    # sign-up/vacancy mistakes without rewriting match history.
+    return True, existing_name
+
+
 @app.route("/")
 def bracket():
     state = load_state()
 
     if state is None:
-        state = save_new_revision(empty_state())
+        state = empty_state()
+        save_state(state)
+    else:
+        state = normalize_state(state)
 
     return render_template("bracket.html", bracket_data=state)
 
@@ -213,50 +238,93 @@ def register():
 
             slots = pad_to_64(players)
 
-            state = empty_state()
-            state["left"] = slots[:32]
-            state["right"] = slots[32:64]
-            state["advancements"] = {
-                f"L-0-{i}": name for i, name in enumerate(state["left"]) if name
-            } | {
-                f"R-0-{i}": name for i, name in enumerate(state["right"]) if name
+            state = {
+                "left": slots[:32],
+                "right": slots[32:64],
+                "advancements": {},
+                "active_matches": [],
+                "replacement_slots": [],
+                "counts": {
+                    "late_players": 0,
+                    "buybacks": 0
+                }
             }
 
-            save_new_revision(state)
+            save_state(state)
 
             return redirect(url_for("bracket"))
 
         if action == "add_late":
+            state = normalize_state(load_state() or empty_state())
+
             players_to_add = [
                 shorten_name(name)
                 for name in late_players
             ]
 
-            with STATE_LOCK:
-                state = load_state_unlocked()
-                state = add_players_to_empty_slots(state, players_to_add)
-                save_new_revision_unlocked(state)
+            random.shuffle(players_to_add)
+
+            available_slots = sum(
+                1 for i in range(64)
+                if is_first_round_slot_empty(state, i)
+            )
+            added_count = min(len(players_to_add), available_slots)
+
+            state = add_players_to_empty_slots(state, players_to_add)
+            state["counts"]["late_players"] += added_count
+
+            save_state(state)
 
             return redirect(url_for("bracket"))
 
         if action == "add_buybacks":
+            state = normalize_state(load_state() or empty_state())
+
             players_to_add = [
                 shorten_name(name, buyback=True)
                 for name in buybacks
             ]
 
-            with STATE_LOCK:
-                state = load_state_unlocked()
-                state = add_players_to_empty_slots(state, players_to_add)
-                save_new_revision_unlocked(state)
+            random.shuffle(players_to_add)
+
+            available_slots = sum(
+                1 for i in range(64)
+                if is_first_round_slot_empty(state, i)
+            )
+            added_count = min(len(players_to_add), available_slots)
+
+            state = add_players_to_empty_slots(state, players_to_add)
+            state["counts"]["buybacks"] += added_count
+
+            save_state(state)
 
             return redirect(url_for("bracket"))
 
     return render_template(
         "register.html",
         members=members,
-        initial_signups=[]
+        counts=get_register_counts()
     )
+
+
+@app.route("/remove_first_round_player", methods=["POST"])
+def remove_first_round_player_route():
+    incoming = request.get_json() or {}
+    slot_id = incoming.get("slot_id", "")
+
+    state = normalize_state(load_state() or empty_state())
+    success, result = remove_first_round_player_from_state(state, slot_id)
+
+    if not success:
+        return {"success": False, "error": result}, 400
+
+    save_state(state)
+
+    return {
+        "success": True,
+        "removed_player": result,
+        "slot_id": slot_id
+    }
 
 
 @app.route("/save_bracket", methods=["POST"])
@@ -266,37 +334,30 @@ def save_bracket_route():
     if not incoming:
         return {"success": False, "error": "No JSON received"}, 400
 
-    with STATE_LOCK:
-        old_state = load_state_unlocked()
-        incoming = normalize_state(incoming)
+    old_state = normalize_state(load_state() or empty_state())
 
-        incoming_revision = incoming.get("revision", 0)
-        old_revision = old_state.get("revision", 0)
+    incoming_names = incoming.get("left", []) + incoming.get("right", [])
+    old_names = old_state.get("left", []) + old_state.get("right", [])
 
-        if incoming_revision < old_revision:
-            return {
-                "success": False,
-                "error": "Stale browser state refused. Refreshing will load the latest bracket.",
-                "revision": old_revision,
-            }, 409
+    incoming_has_players = any(name for name in incoming_names)
+    old_has_players = any(name for name in old_names)
 
-        incoming_names = incoming.get("left", []) + incoming.get("right", [])
-        old_names = old_state.get("left", []) + old_state.get("right", [])
+    if old_has_players and not incoming_has_players:
+        return {
+            "success": False,
+            "error": "Refused to overwrite populated bracket with empty bracket"
+        }, 400
 
-        incoming_has_players = any(name for name in incoming_names)
-        old_has_players = any(name for name in old_names)
+    incoming = normalize_state(incoming)
 
-        if old_has_players and not incoming_has_players:
-            return {
-                "success": False,
-                "error": "Refused to overwrite populated bracket with empty bracket",
-                "revision": old_revision,
-            }, 400
+    # Browser saves only describe bracket UI state. Preserve server-side
+    # registration metadata so a bracket click cannot wipe counts or vacancies.
+    incoming["counts"] = old_state.get("counts", {"late_players": 0, "buybacks": 0})
+    incoming["replacement_slots"] = old_state.get("replacement_slots", [])
 
-        saved = save_new_revision_unlocked(incoming)
+    save_state(incoming)
 
-    return {"success": True, "revision": saved["revision"]}
-
+    return {"success": True}
 
 if __name__ == "__main__":
     app.run(debug=True)

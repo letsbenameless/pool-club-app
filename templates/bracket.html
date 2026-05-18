@@ -3,8 +3,11 @@
 <head>
   <title>64 Player Split Bracket - Compact Line Style</title>
   <style>
+    html,
     body {
       margin: 0;
+      width: 100%;
+      height: 100%;
       background: #050505;
       color: white;
       font-family: Arial, sans-serif;
@@ -12,14 +15,13 @@
     }
 
     .bracket {
-      position: relative;
+      position: absolute;
+      left: 0;
+      top: 0;
       width: 1200px;
       height: 760px;
-
-      margin: 0 auto;
-
-      top: 50%;
-      transform: translateY(20px);
+      margin: 0;
+      transform-origin: top left;
     }
 
     svg {
@@ -83,6 +85,10 @@
       color: #7CFF7C;
     }
 
+    .first-round-removable .name:hover {
+      color: #ff7c7c;
+    }
+
     .active-match .name {
       color: #7CFF7C;
       font-weight: bold;
@@ -115,8 +121,6 @@
 const activeMatchIds = new Set();
 const MAX_ACTIVE_MATCHES = 3;
 const bracketData = {{ bracket_data | tojson }};
-let currentRevision = Number(bracketData.revision || 0);
-let saveQueue = Promise.resolve();
 console.log("bracketData:", bracketData);
 
 const bracket = document.getElementById("bracket");
@@ -124,8 +128,72 @@ const svg = document.getElementById("lines");
 const winners = {};
 const champion = document.getElementById("champion");
 const finalLabel = document.getElementById("final-label");
-champion.textContent = bracketData.champion || "Champion";
 const undoStack = [];
+
+const DESIGN_W = 1200;
+const DESIGN_H = 760;
+
+// Keep this tiny so the bracket fills the fullscreen browser as much as possible.
+const FIT_PADDING = 4;
+
+function getBracketContentBounds() {
+  const bounds = [];
+
+  document.querySelectorAll(".slot, .champion, .final-label").forEach(el => {
+    bounds.push({
+      left: el.offsetLeft,
+      top: el.offsetTop,
+      right: el.offsetLeft + el.offsetWidth,
+      bottom: el.offsetTop + el.offsetHeight
+    });
+  });
+
+  svg.querySelectorAll("path").forEach(path => {
+    try {
+      const box = path.getBBox();
+      bounds.push({
+        left: box.x,
+        top: box.y,
+        right: box.x + box.width,
+        bottom: box.y + box.height
+      });
+    } catch (err) {
+      // Ignore paths that are not measurable yet.
+    }
+  });
+
+  if (!bounds.length) {
+    return { left: 0, top: 0, width: DESIGN_W, height: DESIGN_H };
+  }
+
+  const left = Math.min(...bounds.map(b => b.left));
+  const top = Math.min(...bounds.map(b => b.top));
+  const right = Math.max(...bounds.map(b => b.right));
+  const bottom = Math.max(...bounds.map(b => b.bottom));
+
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top
+  };
+}
+
+function fitBracketToScreen() {
+  const content = getBracketContentBounds();
+  const availableW = Math.max(window.innerWidth - FIT_PADDING * 2, 1);
+  const availableH = Math.max(window.innerHeight - FIT_PADDING * 2, 1);
+
+  // Scale from the actual drawn bracket bounds, not the old 1200x760 design box.
+  // This removes the dead space and makes the bracket visibly bigger.
+  const scale = Math.min(availableW / content.width, availableH / content.height);
+
+  const left = Math.floor((window.innerWidth - content.width * scale) / 2 - content.left * scale);
+  const top = Math.floor((window.innerHeight - content.height * scale) / 2 - content.top * scale);
+
+  bracket.style.transform = `translate(${left}px, ${top}px) scale(${scale})`;
+}
+
 
 const SLOT_W = 52;
 const SLOT_H = 18;
@@ -159,6 +227,12 @@ function createSlot(id, x, y, name) {
   div.id = id;
   div.dataset.name = name || "";
 
+  const [, roundIndex] = id.split("-");
+  if (roundIndex === "0") {
+    div.classList.add("first-round-removable");
+    div.title = "Right-click to remove this first-round player";
+  }
+
   div.style.left = x + "px";
   div.style.top = y + "px";
 
@@ -170,10 +244,53 @@ function createSlot(id, x, y, name) {
     handleSlotClick(id);
   });
 
+  div.addEventListener("contextmenu", (event) => {
+    handleSlotRightClick(event, id);
+  });
+
   bracket.appendChild(div);
 }
 
-function collectBracketState() {
+async function handleSlotRightClick(event, slotId) {
+  event.preventDefault();
+
+  const [side, roundIndex] = slotId.split("-");
+
+  if (roundIndex !== "0") return;
+
+  const slot = document.getElementById(slotId);
+  const playerName = slot?.dataset.name || "";
+
+  if (!playerName) return;
+
+  const ok = confirm(`Remove ${playerName} from this first-round slot? The next late player you add will fill this position first.`);
+  if (!ok) return;
+
+  const response = await fetch("/remove_first_round_player", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ slot_id: slotId })
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok || !result.success) {
+    alert(result.error || "Could not remove player.");
+    return;
+  }
+
+  slot.dataset.name = "";
+  slot.querySelector(".name").textContent = "";
+
+  const matchId = getMatchTopSlotId(slotId);
+  if (activeMatchIds.has(matchId)) {
+    clearActiveMatch(matchId);
+  }
+}
+
+function saveBracketState() {
   const firstRound = [];
 
   for (let i = 0; i < 32; i++) {
@@ -190,54 +307,20 @@ function collectBracketState() {
     left: firstRound.slice(0, 32),
     right: firstRound.slice(32, 64),
     advancements: {},
-    active_matches: [...activeMatchIds],
-    champion: champion.textContent || "Champion",
-    revision: currentRevision
+    active_matches: [...activeMatchIds]
   };
 
   document.querySelectorAll(".slot").forEach(slot => {
-    const name = slot.dataset.name || "";
-    if (name) {
-      state.advancements[slot.id] = name;
-    }
+    state.advancements[slot.id] = slot.dataset.name || "";
   });
 
-  return state;
-}
-
-function saveBracketState() {
-  const state = collectBracketState();
-
-  saveQueue = saveQueue.then(() => {
-    state.revision = currentRevision;
-
-    return fetch("/save_bracket", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(state)
-    });
-  }).then(async response => {
-    const data = await response.json().catch(() => ({}));
-
-    if (response.status === 409) {
-      alert("This bracket was changed somewhere else. The page will reload with the latest saved version.");
-      window.location.reload();
-      return;
-    }
-
-    if (!response.ok || !data.success) {
-      console.error("Save failed:", data.error || response.statusText);
-      return;
-    }
-
-    currentRevision = Number(data.revision || currentRevision);
-  }).catch(err => {
-    console.error("Save request failed:", err);
+  fetch("/save_bracket", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(state)
   });
-
-  return saveQueue;
 }
 
 function markActiveMatches() {
@@ -388,7 +471,6 @@ function advanceWinner(slotId) {
     });
 
     champion.textContent = winnerName;
-    saveBracketState();
     return;
   }
 
@@ -600,6 +682,20 @@ try {
 } catch (err) {
   console.error("Bracket render failed:", err);
 }
+
+fitBracketToScreen();
+window.addEventListener("resize", fitBracketToScreen);
+window.addEventListener("orientationchange", fitBracketToScreen);
+
+// Re-fit after fonts/layout have settled, which prevents tiny clipping on some displays.
+requestAnimationFrame(fitBracketToScreen);
+
+// F11/fullscreen changes can fire without a normal resize event in some browsers.
+document.addEventListener("fullscreenchange", fitBracketToScreen);
+
+// Useful for projectors/TVs where browser chrome disappears after page load.
+setTimeout(fitBracketToScreen, 250);
+
 
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key.toLowerCase() === "z") {

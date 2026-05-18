@@ -52,13 +52,46 @@
       font-weight: bold;
       cursor: pointer;
     }
+
+    .counts {
+      display: flex;
+      gap: 16px;
+      margin: 0 0 24px 0;
+      flex-wrap: wrap;
+    }
+
+    .count-card {
+      background: #1c1c1c;
+      border: 1px solid #444;
+      border-radius: 10px;
+      padding: 12px 16px;
+      min-width: 160px;
+    }
+
+    .count-label {
+      color: #aaa;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .count-value {
+      font-size: 28px;
+      font-weight: bold;
+    }
   </style>
 </head>
 
 <body>
   <h1>Register Players</h1>
 
-  <form method="POST">
+  <div class="counts">
+    <div class="count-card">
+      <div class="count-label">Total Players</div>
+      <div class="count-value">{{ counts.total_players }}</div>
+    </div>
+  </div>
+
+  <form method="POST" id="register-form" autocomplete="off">
     <div class="layout">
 
       <div class="panel">
@@ -82,21 +115,21 @@
         <h2>New Players</h2>
         <p>Used when generating the initial comp.</p>
 
-        <textarea name="new_players"></textarea>
+        <textarea id="new_players" name="new_players"></textarea>
         </div>
 
         <div class="panel">
         <h2>Late Players</h2>
         <p>Added into empty first-round slots without resetting the comp.</p>
 
-        <textarea name="late_players"></textarea>
+        <textarea id="late_players" name="late_players"></textarea>
         </div>
 
         <div class="panel">
         <h2>Buybacks</h2>
         <p>Added into empty first-round slots with an automatic asterisk.</p>
 
-        <textarea name="buybacks"></textarea>
+        <textarea id="buybacks" name="buybacks"></textarea>
         </div>
 
         </div>
@@ -113,5 +146,31 @@
         Add Buybacks
         </button>
   </form>
+
+
+<script>
+const registerForm = document.getElementById("register-form");
+
+const fieldForAction = {
+  generate: "new_players",
+  add_late: "late_players",
+  add_buybacks: "buybacks"
+};
+
+registerForm.addEventListener("submit", (event) => {
+  const clickedButton = event.submitter;
+  const action = clickedButton?.value;
+  const fieldId = fieldForAction[action];
+
+  if (!fieldId) return;
+
+  const field = document.getElementById(fieldId);
+
+  // Let the browser build and send the POST body first, then clear the matching box.
+  setTimeout(() => {
+    field.value = "";
+  }, 0);
+});
+</script>
 </body>
 </html>
