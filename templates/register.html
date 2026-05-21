@@ -10,10 +10,25 @@
       padding: 24px;
     }
 
+    .view-comp-link {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      z-index: 10;
+      padding: 8px 12px;
+      background: #eeeeee;
+      color: #111;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
     .layout {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
       gap: 24px;
+      align-items: start;
     }
 
     .panel {
@@ -23,9 +38,52 @@
       padding: 16px;
     }
 
+    .member-tools {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+      color: #ddd;
+      font-size: 14px;
+    }
+
+    .member-browser {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 10px;
+    }
+
+    .alphabet-nav {
+      position: sticky;
+      top: 12px;
+      align-self: start;
+      display: grid;
+      gap: 2px;
+    }
+
+    .alphabet-nav button {
+      width: 24px;
+      height: 20px;
+      margin: 0;
+      padding: 0;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: #090909;
+      color: #bbb;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .alphabet-nav button:hover {
+      border-color: #777;
+      color: white;
+    }
+
     .member-list {
       max-height: 650px;
       overflow-y: auto;
+      scroll-behavior: smooth;
     }
 
     label {
@@ -45,12 +103,54 @@
       box-sizing: border-box;
     }
 
+    .field-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .line-count {
+      color: #aaa;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
     button {
       margin-top: 20px;
       padding: 12px 20px;
       font-size: 16px;
       font-weight: bold;
       cursor: pointer;
+    }
+
+    .button-link {
+      display: inline-block;
+      margin: 0 0 12px 0;
+      padding: 8px 12px;
+      background: #eeeeee;
+      color: #111;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .member-edit-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .member-edit-row .button-link {
+      margin-bottom: 0;
+    }
+
+    .member-count {
+      color: #aaa;
+      font-size: 13px;
+      white-space: nowrap;
     }
 
     .counts {
@@ -78,16 +178,79 @@
       font-size: 28px;
       font-weight: bold;
     }
+
+    .status-card {
+      min-width: 210px;
+    }
+
+    .status-value {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .status-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #777;
+    }
+
+    .status-active .status-dot {
+      background: #7CFF7C;
+    }
+
+    .status-inactive .status-dot {
+      background: #ff7c7c;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #333;
+      padding: 6px 4px;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    th {
+      color: #aaa;
+      font-weight: normal;
+    }
+
   </style>
 </head>
 
 <body>
+  <a class="view-comp-link" href="{{ url_for('bracket') }}">View Competition</a>
+
   <h1>Register Players</h1>
 
   <div class="counts">
+    <div class="count-card status-card">
+      <div class="count-label">Competition Status</div>
+      <div class="status-value {% if has_initial_comp %}status-active{% else %}status-inactive{% endif %}">
+        <span class="status-dot"></span>
+        {% if has_initial_comp %}Active{% else %}Inactive{% endif %}
+      </div>
+    </div>
     <div class="count-card">
       <div class="count-label">Total Players</div>
       <div class="count-value">{{ counts.total_players }}</div>
+    </div>
+    <div class="count-card">
+      <div class="count-label">Late Players</div>
+      <div class="count-value">{{ counts.late_players }}</div>
+    </div>
+    <div class="count-card">
+      <div class="count-label">Buybacks</div>
+      <div class="count-value">{{ counts.buybacks }}</div>
     </div>
   </div>
 
@@ -96,48 +259,72 @@
 
       <div class="panel">
         <h2>Member Players</h2>
-        <div class="member-list">
-          {% for member in members %}
-            <label>
-              <input
-                type="checkbox"
-                name="members"
-                value="{{ member }}"
-                {% if member in initial_signups %}checked{% endif %}
-              >
-              {{ member }}
-            </label>
-          {% endfor %}
+        <div class="member-edit-row">
+          <a class="button-link" href="{{ url_for('edit_members') }}">Edit Members</a>
+          <span class="member-count">{{ members|length }} members</span>
+        </div>
+        <div class="member-tools">
+          <label>
+            <input type="radio" name="member_sort" value="first" checked>
+            First name
+          </label>
+          <label>
+            <input type="radio" name="member_sort" value="last">
+            Last name
+          </label>
+        </div>
+        <div class="member-browser">
+          <div class="alphabet-nav" id="alphabet-nav"></div>
+          <div class="member-list" id="member-list">
+            {% for member in members %}
+              <label class="member-row" data-name="{{ member }}">
+                <input
+                  type="checkbox"
+                  value="{{ member }}"
+                  {% if member in initial_signups %}checked{% endif %}
+                >
+                <span>{{ member }}</span>
+              </label>
+            {% endfor %}
+          </div>
         </div>
       </div>
 
+      {% if has_initial_comp %}
       <div class="panel">
-        <h2>New Players</h2>
-        <p>Used when generating the initial comp.</p>
-
-        <textarea id="new_players" name="new_players"></textarea>
+        <div class="field-heading">
+          <h2>Late Players</h2>
+          <span class="line-count" data-count-for="late_players">0 lines</span>
         </div>
-
-        <div class="panel">
-        <h2>Late Players</h2>
         <p>Added into empty first-round slots without resetting the comp.</p>
 
         <textarea id="late_players" name="late_players"></textarea>
         </div>
 
         <div class="panel">
-        <h2>Buybacks</h2>
+        <div class="field-heading">
+          <h2>Buybacks</h2>
+          <span class="line-count" data-count-for="buybacks">0 lines</span>
+        </div>
         <p>Added into empty first-round slots with an automatic asterisk.</p>
 
         <textarea id="buybacks" name="buybacks"></textarea>
         </div>
+      {% else %}
+        <div class="panel">
+        <div class="field-heading">
+          <h2>New Players</h2>
+          <span class="line-count" data-count-for="new_players">0 lines</span>
+        </div>
+        <p>Used when generating the initial comp.</p>
+
+        <textarea id="new_players" name="new_players"></textarea>
+        </div>
+      {% endif %}
 
         </div>
 
-        <button type="submit" name="action" value="generate">
-        Generate Initial Comp
-        </button>
-
+        {% if has_initial_comp %}
         <button type="submit" name="action" value="add_late">
         Add Late Players
         </button>
@@ -145,11 +332,59 @@
         <button type="submit" name="action" value="add_buybacks">
         Add Buybacks
         </button>
+
+        <button type="submit" name="action" value="end_comp">
+        End Comp
+        </button>
+        {% else %}
+        <button type="submit" name="action" value="generate">
+        Generate Initial Comp
+        </button>
+        {% endif %}
   </form>
+
+  <div class="panel" style="margin-top: 24px;">
+    <h2>Player Elo Ratings</h2>
+    <p>Ratings update automatically when a game winner is advanced in the bracket.</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Elo</th>
+          <th>W</th>
+          <th>L</th>
+          <th>Games</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for player in rankings %}
+          <tr>
+            <td>{{ player.name }}</td>
+            <td>{{ "%.0f"|format(player.elo) }}</td>
+            <td>{{ player.wins }}</td>
+            <td>{{ player.losses }}</td>
+            <td>{{ player.games_played }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5">No rated players yet.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
 
 <script>
 const registerForm = document.getElementById("register-form");
+const memberList = document.getElementById("member-list");
+const alphabetNav = document.getElementById("alphabet-nav");
+const newPlayersField = document.getElementById("new_players");
+const latePlayersField = document.getElementById("late_players");
+const textareas = Array.from(document.querySelectorAll("textarea"));
+const memberRows = Array.from(document.querySelectorAll(".member-row"));
+const hasInitialComp = {{ has_initial_comp | tojson }};
 
 const fieldForAction = {
   generate: "new_players",
@@ -157,9 +392,154 @@ const fieldForAction = {
   add_buybacks: "buybacks"
 };
 
+function playerLines(field) {
+  return field.value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+function updateLineCount(field) {
+  const count = playerLines(field).length;
+  const counter = document.querySelector(`[data-count-for="${field.id}"]`);
+  if (!counter) return;
+
+  counter.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
+}
+
+function updateAllLineCounts() {
+  textareas.forEach(updateLineCount);
+}
+
+function nameParts(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return {
+    first: parts[0] || "",
+    last: parts.length > 1 ? parts[parts.length - 1] : parts[0] || ""
+  };
+}
+
+function sortKeyForName(name, mode) {
+  const parts = nameParts(name);
+  const primary = mode === "last" ? parts.last : parts.first;
+  const secondary = mode === "last" ? parts.first : parts.last;
+
+  return `${primary} ${secondary} ${name}`.toLocaleLowerCase();
+}
+
+function initialForName(name, mode) {
+  const parts = nameParts(name);
+  const value = mode === "last" ? parts.last : parts.first;
+  const initial = value.charAt(0).toUpperCase();
+
+  return /^[A-Z]$/.test(initial) ? initial : "#";
+}
+
+function currentSortMode() {
+  return document.querySelector("input[name='member_sort']:checked")?.value || "first";
+}
+
+function sortMembers() {
+  const mode = currentSortMode();
+
+  memberRows
+    .sort((a, b) => {
+      const aName = a.dataset.name || "";
+      const bName = b.dataset.name || "";
+      return sortKeyForName(aName, mode).localeCompare(sortKeyForName(bName, mode));
+    })
+    .forEach(row => {
+      row.dataset.initial = initialForName(row.dataset.name || "", mode);
+      memberList.appendChild(row);
+    });
+}
+
+function renderAlphabetNav() {
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").forEach(letter => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = letter;
+    button.addEventListener("click", () => {
+      const row = memberRows.find(memberRow => memberRow.dataset.initial === letter);
+      if (!row) return;
+
+      memberList.scrollTop = row.offsetTop - memberList.offsetTop;
+    });
+    alphabetNav.appendChild(button);
+  });
+}
+
+function memberTargetField() {
+  return hasInitialComp ? latePlayersField : newPlayersField;
+}
+
+function setFieldLines(field, lines) {
+  field.value = lines.join("\n");
+  updateLineCount(field);
+}
+
+function addMemberToTargetField(name) {
+  const field = memberTargetField();
+  const lines = playerLines(field);
+
+  if (!lines.includes(name)) {
+    lines.push(name);
+    setFieldLines(field, lines);
+  }
+}
+
+function removeMemberFromTargetField(name) {
+  const field = memberTargetField();
+  const lines = playerLines(field).filter(line => line !== name);
+  setFieldLines(field, lines);
+}
+
+function syncMemberCheckboxesFromTargetField() {
+  const selectedNames = new Set(playerLines(memberTargetField()));
+
+  memberRows.forEach(row => {
+    const checkbox = row.querySelector("input[type='checkbox']");
+    checkbox.checked = selectedNames.has(row.dataset.name || "");
+  });
+}
+
+document.querySelectorAll("input[name='member_sort']").forEach(input => {
+  input.addEventListener("change", sortMembers);
+});
+
+memberRows.forEach(row => {
+  const checkbox = row.querySelector("input[type='checkbox']");
+
+  checkbox.addEventListener("change", () => {
+    const name = row.dataset.name || "";
+
+    if (checkbox.checked) {
+      addMemberToTargetField(name);
+    } else {
+      removeMemberFromTargetField(name);
+    }
+  });
+});
+
+textareas.forEach(field => {
+  field.addEventListener("input", () => {
+    updateLineCount(field);
+
+    if (field === memberTargetField()) {
+      syncMemberCheckboxesFromTargetField();
+    }
+  });
+});
+
 registerForm.addEventListener("submit", (event) => {
   const clickedButton = event.submitter;
   const action = clickedButton?.value;
+
+  if (action === "end_comp" && !confirm("End the current competition and clear the bracket?")) {
+    event.preventDefault();
+    return;
+  }
+
   const fieldId = fieldForAction[action];
 
   if (!fieldId) return;
@@ -171,6 +551,11 @@ registerForm.addEventListener("submit", (event) => {
     field.value = "";
   }, 0);
 });
+
+renderAlphabetNav();
+sortMembers();
+updateAllLineCounts();
+syncMemberCheckboxesFromTargetField();
 </script>
 </body>
 </html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Edit Members</title>
+  <style>
+    body {
+      background: #111;
+      color: white;
+      font-family: Arial, sans-serif;
+      padding: 24px;
+    }
+
+    .panel {
+      max-width: 720px;
+      background: #1c1c1c;
+      border: 1px solid #444;
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .field-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .line-count {
+      color: #aaa;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 560px;
+      background: #050505;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 8px;
+      padding: 10px;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    button,
+    .button-link {
+      display: inline-block;
+      margin-top: 16px;
+      margin-right: 8px;
+      padding: 12px 20px;
+      background: #eeeeee;
+      color: #111;
+      border: 0;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Edit Members</h1>
+
+  <form method="POST" class="panel" autocomplete="off">
+    <div class="field-heading">
+      <h2>Member List</h2>
+      <span class="line-count" id="member-count">{{ member_count }} lines</span>
+    </div>
+
+    <textarea id="members" name="members">{{ members_text }}</textarea>
+
+    <button type="submit">Save Members</button>
+    <a class="button-link" href="{{ url_for('register') }}">Back</a>
+  </form>
+
+  <script>
+  const membersField = document.getElementById("members");
+  const memberCount = document.getElementById("member-count");
+
+  function countLines() {
+    const count = membersField.value
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .length;
+
+    memberCount.textContent = `${count} ${count === 1 ? "line" : "lines"}`;
+  }
+
+  membersField.addEventListener("input", countLines);
+  countLines();
+  </script>
+</body>
+</html>

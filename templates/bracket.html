@@ -105,10 +105,27 @@
       padding: 1px 4px;
       border-radius: 4px;
     }
+
+    .back-link {
+      position: fixed;
+      left: 50%;
+      bottom: 12px;
+      transform: translateX(-50%);
+      z-index: 10;
+      padding: 8px 12px;
+      background: #eeeeee;
+      color: #111;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: bold;
+    }
   </style>
 </head>
 
 <body>
+
+<a class="back-link" href="{{ url_for('register') }}">Register players</a>
 
 <div class="bracket" id="bracket">
   <svg id="lines"></svg>
@@ -129,6 +146,7 @@ const winners = {};
 const champion = document.getElementById("champion");
 const finalLabel = document.getElementById("final-label");
 const undoStack = [];
+let saveQueue = Promise.resolve();
 
 const DESIGN_W = 1200;
 const DESIGN_H = 760;
@@ -290,7 +308,7 @@ async function handleSlotRightClick(event, slotId) {
   }
 }
 
-function saveBracketState() {
+function buildBracketState() {
   const firstRound = [];
 
   for (let i = 0; i < 32; i++) {
@@ -314,12 +332,41 @@ function saveBracketState() {
     state.advancements[slot.id] = slot.dataset.name || "";
   });
 
+  return state;
+}
+
+function saveBracketState() {
+  const state = buildBracketState();
+
+  saveQueue = saveQueue
+    .catch(() => {})
+    .then(() => fetch("/save_bracket", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(state)
+    }));
+
+  return saveQueue;
+}
+
+function sendBracketStateBeforeUnload() {
+  const body = JSON.stringify(buildBracketState());
+
+  if (navigator.sendBeacon) {
+    const blob = new Blob([body], { type: "application/json" });
+    navigator.sendBeacon("/save_bracket", blob);
+    return;
+  }
+
   fetch("/save_bracket", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(state)
+    keepalive: true,
+    body
   });
 }
 
@@ -377,7 +424,7 @@ function clearActiveMatch(matchId = null) {
   document.getElementById(bottomSlotId)?.classList.remove("active-match");
 
   activeMatchIds.delete(matchId);
-  saveBracketState();
+  return saveBracketState();
 }
 
 function markMatchActive(slotId) {
@@ -405,7 +452,7 @@ function markMatchActive(slotId) {
   saveBracketState();
 }
 
-function handleSlotClick(slotId) {
+async function handleSlotClick(slotId) {
   const clickedSlot = document.getElementById(slotId);
   const clickedName = clickedSlot.dataset.name;
 
@@ -418,8 +465,8 @@ function handleSlotClick(slotId) {
     return;
   }
 
-  advanceWinner(slotId);
-  clearActiveMatch(clickedMatchId);
+  await advanceWinner(slotId, { save: false });
+  await clearActiveMatch(clickedMatchId);
 }
 
 function addPlayersToFirstEmptySlots(players) {
@@ -453,7 +500,45 @@ function addPlayersToFirstEmptySlots(players) {
   saveBracketState();
 }
 
-function advanceWinner(slotId) {
+async function postMatchResult(matchId, winnerName, loserName) {
+  if (!winnerName || !loserName) return null;
+
+  const response = await fetch("/record_match_result", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      match_id: matchId,
+      winner_name: winnerName,
+      loser_name: loserName
+    })
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok || !result.success) {
+    alert(result.error || "The bracket advanced, but the Elo result could not be saved.");
+    return null;
+  }
+
+  return result;
+}
+
+async function undoMatchResult(matchResultId) {
+  if (!matchResultId) return;
+
+  await fetch("/undo_match_result", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ match_result_id: matchResultId })
+  });
+}
+
+async function advanceWinner(slotId, options = {}) {
+  const shouldSave = options.save !== false;
   const parts = slotId.split("-");
   const sidePrefix = parts[0];
   const roundIndex = Number(parts[1]);
@@ -464,13 +549,24 @@ function advanceWinner(slotId) {
 
   if (!winnerName) return;
 
+  const matchId = getMatchTopSlotId(slotId);
+  const [topSlotId, bottomSlotId] = getMatchSlotIds(slotId);
+  const loserSlotId = slotId === topSlotId ? bottomSlotId : topSlotId;
+  const loserSlot = document.getElementById(loserSlotId);
+  const loserName = loserSlot?.dataset.name || "";
+  const eloResult = await postMatchResult(matchId, winnerName, loserName);
+
   if (roundIndex >= rounds.length - 1) {
     undoStack.push({
       type: "champion",
-      previousChampion: champion.textContent
+      previousChampion: champion.textContent,
+      matchResultId: eloResult?.match_result_id || null
     });
 
     champion.textContent = winnerName;
+    if (shouldSave) {
+      await saveBracketState();
+    }
     return;
   }
 
@@ -480,15 +576,18 @@ function advanceWinner(slotId) {
   undoStack.push({
     type: "advance",
     targetSlotId: nextSlotId,
-    previousName: nextSlot.dataset.name || ""
+    previousName: nextSlot.dataset.name || "",
+    matchResultId: eloResult?.match_result_id || null
   });
 
   nextSlot.dataset.name = winnerName;
   nextSlot.querySelector(".name").textContent = winnerName;
-  saveBracketState();
+  if (shouldSave) {
+    await saveBracketState();
+  }
 }
 
-function undoLastAction() {
+async function undoLastAction() {
   const lastAction = undoStack.pop();
 
   if (!lastAction) return;
@@ -509,6 +608,8 @@ function undoLastAction() {
   }
 
   if (lastAction.type === "advance") {
+    await undoMatchResult(lastAction.matchResultId);
+
     const slot = document.getElementById(lastAction.targetSlotId);
 
     slot.dataset.name = lastAction.previousName;
@@ -516,6 +617,7 @@ function undoLastAction() {
   }
 
   if (lastAction.type === "champion") {
+    await undoMatchResult(lastAction.matchResultId);
     champion.textContent = lastAction.previousChampion;
   }
 
@@ -686,6 +788,7 @@ try {
 fitBracketToScreen();
 window.addEventListener("resize", fitBracketToScreen);
 window.addEventListener("orientationchange", fitBracketToScreen);
+window.addEventListener("pagehide", sendBracketStateBeforeUnload);
 
 // Re-fit after fonts/layout have settled, which prevents tiny clipping on some displays.
 requestAnimationFrame(fitBracketToScreen);
