@@ -14,6 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "pool_comp.sqlite3")
 OLD_STATE_FILE = os.path.join(BASE_DIR, "bracket_state.json")
 MEMBERS_FILE = os.path.join(BASE_DIR, "members.json")
+KNOWN_PLAYERS_FILE = os.path.join(BASE_DIR, "known_players.json")
 DEFAULT_ELO = 1000
 ELO_K_FACTOR = 32
 APP_STATE_ID = 1
@@ -251,6 +252,73 @@ def save_members(members):
         json.dump(clean_members, f, indent=2)
 
     return clean_members
+
+
+def unique_names(names):
+    clean_names = []
+    seen_names = set()
+
+    for value in names:
+        name = str(value or "").strip()
+        key = name.casefold()
+
+        if name and key not in seen_names:
+            clean_names.append(name)
+            seen_names.add(key)
+
+    return clean_names
+
+
+def sort_names(names):
+    return sorted(names, key=lambda name: name.casefold())
+
+
+def load_known_player_names():
+    known_names = []
+
+    if os.path.exists(KNOWN_PLAYERS_FILE):
+        try:
+            with open(KNOWN_PLAYERS_FILE, "r", encoding="utf-8") as f:
+                stored_known_players = json.load(f)
+
+            if isinstance(stored_known_players, list):
+                known_names.extend(stored_known_players)
+        except json.JSONDecodeError:
+            pass
+
+    known_names.extend(load_members())
+
+    with closing(get_db()) as conn:
+        rows = conn.execute("SELECT name FROM players ORDER BY name ASC").fetchall()
+        known_names.extend(row["name"] for row in rows)
+
+    return sort_names(unique_names(known_names))
+
+
+def save_known_player_names(names):
+    clean_names = sort_names(unique_names(names))
+
+    with open(KNOWN_PLAYERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(clean_names, f, indent=2)
+
+    return clean_names
+
+
+def add_known_players(names):
+    existing = load_known_player_names()
+    return save_known_player_names(existing + list(names))
+
+
+def get_known_players():
+    member_keys = {name.casefold() for name in load_members()}
+
+    return [
+        {
+            "name": name,
+            "is_member": name.casefold() in member_keys
+        }
+        for name in load_known_player_names()
+    ]
 
 
 def load_state():
@@ -624,12 +692,15 @@ def register():
             return redirect(url_for("register"))
 
         if action == "generate":
-            players = [
-                shorten_name(name)
+            player_entries = [
+                (name, shorten_name(name))
                 for name in new_players
             ]
 
-            random.shuffle(players)
+            random.shuffle(player_entries)
+
+            player_entries = player_entries[:64]
+            players = [short_name for _, short_name in player_entries]
 
             slots = pad_to_64(players)
 
@@ -645,6 +716,7 @@ def register():
                 }
             }
 
+            add_known_players(raw_name for raw_name, _ in player_entries)
             ensure_players_exist(players)
             save_state(state)
 
@@ -653,23 +725,26 @@ def register():
         if action == "add_late":
             state = normalize_state(load_state() or empty_state())
 
-            players_to_add = [
-                shorten_name(name)
+            player_entries = [
+                (name, shorten_name(name))
                 for name in late_players
             ]
 
-            random.shuffle(players_to_add)
+            random.shuffle(player_entries)
 
             available_slots = sum(
                 1 for i in range(64)
                 if is_first_round_slot_empty(state, i)
             )
-            added_count = min(len(players_to_add), available_slots)
+            added_count = min(len(player_entries), available_slots)
+            added_entries = player_entries[:added_count]
+            players_to_add = [short_name for _, short_name in added_entries]
 
             state = add_players_to_empty_slots(state, players_to_add)
             state["counts"]["late_players"] += added_count
 
-            ensure_players_exist(players_to_add[:added_count])
+            add_known_players(raw_name for raw_name, _ in added_entries)
+            ensure_players_exist(players_to_add)
             save_state(state)
 
             return redirect(url_for("bracket"))
@@ -677,23 +752,26 @@ def register():
         if action == "add_buybacks":
             state = normalize_state(load_state() or empty_state())
 
-            players_to_add = [
-                shorten_name(name, buyback=True)
+            player_entries = [
+                (name, shorten_name(name, buyback=True))
                 for name in buybacks
             ]
 
-            random.shuffle(players_to_add)
+            random.shuffle(player_entries)
 
             available_slots = sum(
                 1 for i in range(64)
                 if is_first_round_slot_empty(state, i)
             )
-            added_count = min(len(players_to_add), available_slots)
+            added_count = min(len(player_entries), available_slots)
+            added_entries = player_entries[:added_count]
+            players_to_add = [short_name for _, short_name in added_entries]
 
             state = add_players_to_empty_slots(state, players_to_add)
             state["counts"]["buybacks"] += added_count
 
-            ensure_players_exist(players_to_add[:added_count])
+            add_known_players(raw_name for raw_name, _ in added_entries)
+            ensure_players_exist(players_to_add)
             save_state(state)
 
             return redirect(url_for("bracket"))
@@ -703,6 +781,7 @@ def register():
     return render_template(
         "register.html",
         members=load_members(),
+        known_players=get_known_players(),
         counts=counts,
         initial_signups=[],
         rankings=get_rankings(),

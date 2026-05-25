@@ -86,6 +86,38 @@
       scroll-behavior: smooth;
     }
 
+    .member-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .member-row[hidden] {
+      display: none;
+    }
+
+    .player-type {
+      margin-left: auto;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: bold;
+      color: #111;
+      background: #aaa;
+    }
+
+    .member-row.is-member .player-type {
+      background: #7CFF7C;
+    }
+
+    .member-row.is-non-member {
+      color: #d5d5d5;
+    }
+
+    .member-row.is-non-member .player-type {
+      background: #d7d7d7;
+    }
+
     label {
       display: block;
       margin: 6px 0;
@@ -101,6 +133,39 @@
       padding: 10px;
       resize: vertical;
       box-sizing: border-box;
+    }
+
+    .textarea-wrap {
+      position: relative;
+    }
+
+    .autocomplete-hint {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      pointer-events: none;
+      color: #777;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      opacity: 0;
+      transform: translateY(2px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: calc(100% - 20px);
+    }
+
+    .textarea-wrap.has-suggestion .autocomplete-hint {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .suggestion-key {
+      color: #aaa;
+      font-size: 12px;
+      margin-right: 6px;
     }
 
     .field-heading {
@@ -258,10 +323,10 @@
     <div class="layout">
 
       <div class="panel">
-        <h2>Member Players</h2>
+        <h2>Known Players</h2>
         <div class="member-edit-row">
           <a class="button-link" href="{{ url_for('edit_members') }}">Edit Members</a>
-          <span class="member-count">{{ members|length }} members</span>
+          <span class="member-count">{{ known_players|length }} known / {{ members|length }} members</span>
         </div>
         <div class="member-tools">
           <label>
@@ -272,18 +337,31 @@
             <input type="radio" name="member_sort" value="last">
             Last name
           </label>
+          <label>
+            <input type="checkbox" id="show-members" checked>
+            Members
+          </label>
+          <label>
+            <input type="checkbox" id="show-non-members" checked>
+            Non-members
+          </label>
         </div>
         <div class="member-browser">
           <div class="alphabet-nav" id="alphabet-nav"></div>
           <div class="member-list" id="member-list">
-            {% for member in members %}
-              <label class="member-row" data-name="{{ member }}">
+            {% for player in known_players %}
+              <label
+                class="member-row {% if player.is_member %}is-member{% else %}is-non-member{% endif %}"
+                data-name="{{ player.name }}"
+                data-is-member="{{ player.is_member | tojson }}"
+              >
                 <input
                   type="checkbox"
-                  value="{{ member }}"
-                  {% if member in initial_signups %}checked{% endif %}
+                  value="{{ player.name }}"
+                  {% if player.name in initial_signups %}checked{% endif %}
                 >
-                <span>{{ member }}</span>
+                <span>{{ player.name }}</span>
+                <span class="player-type">{% if player.is_member %}Member{% else %}Non-member{% endif %}</span>
               </label>
             {% endfor %}
           </div>
@@ -298,7 +376,10 @@
         </div>
         <p>Added into empty first-round slots without resetting the comp.</p>
 
-        <textarea id="late_players" name="late_players"></textarea>
+        <div class="textarea-wrap">
+          <textarea id="late_players" name="late_players"></textarea>
+          <div class="autocomplete-hint" aria-hidden="true"></div>
+        </div>
         </div>
 
         <div class="panel">
@@ -308,7 +389,10 @@
         </div>
         <p>Added into empty first-round slots with an automatic asterisk.</p>
 
-        <textarea id="buybacks" name="buybacks"></textarea>
+        <div class="textarea-wrap">
+          <textarea id="buybacks" name="buybacks"></textarea>
+          <div class="autocomplete-hint" aria-hidden="true"></div>
+        </div>
         </div>
       {% else %}
         <div class="panel">
@@ -318,7 +402,10 @@
         </div>
         <p>Used when generating the initial comp.</p>
 
-        <textarea id="new_players" name="new_players"></textarea>
+        <div class="textarea-wrap">
+          <textarea id="new_players" name="new_players"></textarea>
+          <div class="autocomplete-hint" aria-hidden="true"></div>
+        </div>
         </div>
       {% endif %}
 
@@ -385,6 +472,10 @@ const latePlayersField = document.getElementById("late_players");
 const textareas = Array.from(document.querySelectorAll("textarea"));
 const memberRows = Array.from(document.querySelectorAll(".member-row"));
 const hasInitialComp = {{ has_initial_comp | tojson }};
+const knownPlayerSuggestions = {{ known_players | map(attribute="name") | list | tojson }};
+const showMembersToggle = document.getElementById("show-members");
+const showNonMembersToggle = document.getElementById("show-non-members");
+const autocompleteState = new Map();
 
 const fieldForAction = {
   generate: "new_players",
@@ -452,6 +543,18 @@ function sortMembers() {
       row.dataset.initial = initialForName(row.dataset.name || "", mode);
       memberList.appendChild(row);
     });
+
+  filterKnownPlayers();
+}
+
+function filterKnownPlayers() {
+  const showMembers = showMembersToggle?.checked ?? true;
+  const showNonMembers = showNonMembersToggle?.checked ?? true;
+
+  memberRows.forEach(row => {
+    const isMember = row.dataset.isMember === "true";
+    row.hidden = isMember ? !showMembers : !showNonMembers;
+  });
 }
 
 function renderAlphabetNav() {
@@ -460,7 +563,9 @@ function renderAlphabetNav() {
     button.type = "button";
     button.textContent = letter;
     button.addEventListener("click", () => {
-      const row = memberRows.find(memberRow => memberRow.dataset.initial === letter);
+      const row = memberRows.find(memberRow => {
+        return memberRow.dataset.initial === letter && !memberRow.hidden;
+      });
       if (!row) return;
 
       memberList.scrollTop = row.offsetTop - memberList.offsetTop;
@@ -503,8 +608,191 @@ function syncMemberCheckboxesFromTargetField() {
   });
 }
 
+function activeLineInfo(field) {
+  const cursor = field.selectionStart || 0;
+  const beforeCursor = field.value.slice(0, cursor);
+  const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+  const lineEndIndex = field.value.indexOf("\n", cursor);
+  const lineEnd = lineEndIndex === -1 ? field.value.length : lineEndIndex;
+  const prefix = field.value.slice(lineStart, cursor);
+  const suffix = field.value.slice(cursor, lineEnd);
+  const line = field.value.slice(lineStart, lineEnd);
+
+  return {
+    cursor,
+    lineStart,
+    lineEnd,
+    line,
+    prefix,
+    suffix,
+    query: prefix.trimStart()
+  };
+}
+
+function matchingSuggestions(field, query, currentValue = "") {
+  const normalizedQuery = query.toLocaleLowerCase();
+  const normalizedCurrentValue = currentValue.toLocaleLowerCase();
+  const existing = new Set(
+    playerLines(field)
+      .filter(name => name.toLocaleLowerCase() !== normalizedCurrentValue)
+      .map(name => name.toLocaleLowerCase())
+  );
+
+  return knownPlayerSuggestions.filter(name => {
+    const lowered = name.toLocaleLowerCase();
+    return lowered.startsWith(normalizedQuery)
+      && lowered !== normalizedQuery
+      && !existing.has(lowered);
+  });
+}
+
+function completionForField(field) {
+  const info = activeLineInfo(field);
+  const previous = autocompleteState.get(field.id);
+
+  if (previous && info.line === previous.currentValue && !info.suffix.trim()) {
+    return {
+      ...previous,
+      fromState: true,
+      info,
+      suggestion: previous.options[previous.index] || null
+    };
+  }
+
+  const query = info.query;
+  if (!query || info.suffix.trim()) return null;
+
+  const options = matchingSuggestions(field, query, info.line);
+  if (!options.length) return null;
+
+  return {
+    baseQuery: query,
+    options,
+    index: 0,
+    currentValue: options[0],
+    fromState: false,
+    info,
+    suggestion: options[0]
+  };
+}
+
+function caretPosition(field) {
+  const style = window.getComputedStyle(field);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+  const beforeCursor = field.value.slice(0, field.selectionStart || 0);
+
+  [
+    "boxSizing", "width", "fontFamily", "fontSize", "fontWeight", "lineHeight",
+    "letterSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+    "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+    "whiteSpace", "wordWrap"
+  ].forEach(prop => {
+    mirror.style[prop] = style[prop];
+  });
+
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.left = "-9999px";
+  mirror.style.top = "0";
+  mirror.style.height = "auto";
+  mirror.style.minHeight = "0";
+  mirror.style.overflow = "hidden";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.wordBreak = "break-word";
+  mirror.textContent = beforeCursor;
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+
+  const markerRect = marker.getBoundingClientRect();
+  const mirrorRect = mirror.getBoundingClientRect();
+  const left = markerRect.left - mirrorRect.left - field.scrollLeft;
+  const top = markerRect.top - mirrorRect.top - field.scrollTop;
+  const lineHeight = Number.parseFloat(style.lineHeight) || 18;
+
+  mirror.remove();
+
+  return {
+    left,
+    top,
+    lineHeight
+  };
+}
+
+function updateAutocompleteHint(field) {
+  const wrap = field.closest(".textarea-wrap");
+  const hint = wrap?.querySelector(".autocomplete-hint");
+  if (!wrap || !hint) return;
+
+  const completion = completionForField(field);
+  const suggestion = completion?.suggestion || null;
+
+  if (!suggestion || document.activeElement !== field) {
+    wrap.classList.remove("has-suggestion");
+    hint.textContent = "";
+    return;
+  }
+
+  const caret = caretPosition(field);
+  hint.style.left = `${Math.min(caret.left + 12, field.clientWidth - 48)}px`;
+  hint.style.top = `${caret.top + 9}px`;
+  hint.style.maxWidth = `${Math.max(field.clientWidth - caret.left - 24, 80)}px`;
+  hint.textContent = "";
+
+  const key = document.createElement("span");
+  key.className = "suggestion-key";
+  key.textContent = completion.options.length > 1
+    ? `Tab ${completion.index + 1}/${completion.options.length}`
+    : "Tab";
+  hint.appendChild(key);
+  hint.append(document.createTextNode(suggestion));
+
+  wrap.classList.add("has-suggestion");
+}
+
+function acceptAutocompleteSuggestion(field, direction = 1) {
+  const completion = completionForField(field);
+  const suggestion = completion?.suggestion || null;
+  if (!suggestion) return false;
+
+  const info = completion.info;
+  const indentation = info.prefix.match(/^\s*/)?.[0] || "";
+  const index = completion.options.length > 1
+    ? (completion.fromState ? completion.index + direction + completion.options.length : 0) % completion.options.length
+    : completion.index;
+  const nextSuggestion = completion.options[index] || suggestion;
+  const beforeLine = field.value.slice(0, info.lineStart);
+  const afterLine = field.value.slice(info.lineEnd);
+  const completedLine = `${indentation}${nextSuggestion}`;
+  const nextCursor = beforeLine.length + completedLine.length;
+
+  field.value = beforeLine + completedLine + afterLine;
+  field.selectionStart = nextCursor;
+  field.selectionEnd = nextCursor;
+  autocompleteState.set(field.id, {
+    baseQuery: completion.baseQuery,
+    options: completion.options,
+    index,
+    currentValue: completedLine
+  });
+
+  updateLineCount(field);
+
+  if (field === memberTargetField()) {
+    syncMemberCheckboxesFromTargetField();
+  }
+
+  updateAutocompleteHint(field);
+  return true;
+}
+
 document.querySelectorAll("input[name='member_sort']").forEach(input => {
   input.addEventListener("change", sortMembers);
+});
+
+[showMembersToggle, showNonMembersToggle].forEach(input => {
+  input?.addEventListener("change", filterKnownPlayers);
 });
 
 memberRows.forEach(row => {
@@ -523,12 +811,27 @@ memberRows.forEach(row => {
 
 textareas.forEach(field => {
   field.addEventListener("input", () => {
+    autocompleteState.delete(field.id);
     updateLineCount(field);
 
     if (field === memberTargetField()) {
       syncMemberCheckboxesFromTargetField();
     }
+
+    updateAutocompleteHint(field);
   });
+
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" && acceptAutocompleteSuggestion(field, event.shiftKey ? -1 : 1)) {
+      event.preventDefault();
+    }
+  });
+
+  ["focus", "click", "keyup"].forEach(eventName => {
+    field.addEventListener(eventName, () => updateAutocompleteHint(field));
+  });
+
+  field.addEventListener("blur", () => updateAutocompleteHint(field));
 });
 
 registerForm.addEventListener("submit", (event) => {
