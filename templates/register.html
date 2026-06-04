@@ -2,40 +2,102 @@
 <html>
 <head>
   <title>Register Players</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
-      background: #111;
-      color: white;
+      margin: 0;
+      background: #101010;
+      color: #f5f5f5;
       font-family: Arial, sans-serif;
-      padding: 24px;
     }
 
-    .view-comp-link {
-      position: fixed;
-      left: 12px;
-      top: 12px;
+    header {
+      position: sticky;
+      top: 0;
       z-index: 10;
-      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #171717;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    p {
+      color: #aaa;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    a,
+    button {
+      border: 1px solid #555;
+      border-radius: 6px;
       background: #eeeeee;
       color: #111;
-      border-radius: 4px;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-weight: bold;
       text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.secondary,
+    button.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    button.danger {
+      background: #ffdddd;
+      border-color: #ff9f9f;
+      color: #111;
+    }
+
+    main {
+      padding: 18px;
+    }
+
+    .nav-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .week-badge {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #aaa;
       font-size: 13px;
       font-weight: bold;
+      white-space: nowrap;
     }
 
     .layout {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 10px;
       align-items: start;
     }
 
     .panel {
-      background: #1c1c1c;
-      border: 1px solid #444;
-      border-radius: 10px;
-      padding: 16px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 12px;
     }
 
     .member-tools {
@@ -86,6 +148,10 @@
       scroll-behavior: smooth;
     }
 
+    .known-players-panel {
+      margin-top: 24px;
+    }
+
     .member-row {
       display: flex;
       align-items: center;
@@ -119,20 +185,28 @@
     }
 
     label {
-      display: block;
-      margin: 6px 0;
+      color: #ddd;
+      font-size: 13px;
+      font-weight: bold;
     }
 
     textarea {
       width: 100%;
       height: 250px;
       background: #050505;
-      color: white;
+      color: #f5f5f5;
       border: 1px solid #555;
-      border-radius: 8px;
+      border-radius: 6px;
       padding: 10px;
       resize: vertical;
       box-sizing: border-box;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    textarea:focus {
+      border-color: #7CFF7C;
+      outline: none;
     }
 
     .textarea-wrap {
@@ -143,17 +217,22 @@
       position: absolute;
       left: 10px;
       top: 10px;
-      pointer-events: none;
-      color: #777;
-      font-family: Consolas, "Courier New", monospace;
+      pointer-events: auto;
+      z-index: 4;
+      box-sizing: border-box;
+      border: 1px solid #454545;
+      border-radius: 8px;
+      background: rgba(8, 8, 8, 0.96);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      color: #ddd;
+      padding: 7px;
+      font-family: Arial, sans-serif;
       font-size: 13px;
-      line-height: 1.4;
+      line-height: 1.25;
       opacity: 0;
       transform: translateY(2px);
       transition: opacity 0.12s ease, transform 0.12s ease;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
       max-width: calc(100% - 20px);
     }
 
@@ -165,7 +244,33 @@
     .suggestion-key {
       color: #aaa;
       font-size: 12px;
-      margin-right: 6px;
+      margin: 0 0 5px;
+    }
+
+    .autocomplete-options {
+      display: grid;
+      gap: 2px;
+      max-height: min(260px, 52vh);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    .autocomplete-option {
+      overflow: hidden;
+      border-radius: 4px;
+      padding: 4px 6px;
+      color: #aaa;
+      cursor: pointer;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+
+    .autocomplete-option:hover,
+    .autocomplete-option.active {
+      background: #7CFF7C;
+      color: #111;
+      font-weight: bold;
     }
 
     .field-heading {
@@ -179,26 +284,6 @@
       color: #aaa;
       font-size: 13px;
       white-space: nowrap;
-    }
-
-    button {
-      margin-top: 20px;
-      padding: 12px 20px;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    .button-link {
-      display: inline-block;
-      margin: 0 0 12px 0;
-      padding: 8px 12px;
-      background: #eeeeee;
-      color: #111;
-      border-radius: 4px;
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: bold;
     }
 
     .member-edit-row {
@@ -219,40 +304,37 @@
     }
 
     .counts {
-      display: flex;
-      gap: 16px;
-      margin: 0 0 24px 0;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin: 0 0 16px;
     }
 
     .count-card {
-      background: #1c1c1c;
-      border: 1px solid #444;
-      border-radius: 10px;
-      padding: 12px 16px;
-      min-width: 160px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 12px;
     }
 
     .count-label {
-      color: #aaa;
-      font-size: 13px;
       margin-bottom: 6px;
+      color: #aaa;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
     }
 
     .count-value {
-      font-size: 28px;
+      font-size: 24px;
       font-weight: bold;
-    }
-
-    .status-card {
-      min-width: 210px;
     }
 
     .status-value {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-size: 20px;
+      font-size: 24px;
       font-weight: bold;
     }
 
@@ -274,99 +356,142 @@
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 10px;
     }
 
     th, td {
-      border-bottom: 1px solid #333;
-      padding: 6px 4px;
+      border-bottom: 1px solid #303030;
+      padding: 9px 7px;
       text-align: left;
-      font-size: 13px;
+      vertical-align: middle;
     }
 
     th {
       color: #aaa;
-      font-weight: normal;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0;
+    }
+
+    .action-bar button {
+      margin: 0;
+    }
+
+    @media (max-width: 760px) {
+      header {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-actions {
+        width: 100%;
+      }
+
+      .week-badge {
+        position: static;
+        transform: none;
+      }
+
+      .nav-actions a {
+        flex: 1 1 auto;
+        text-align: center;
+      }
+
+      main {
+        padding: 12px;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .counts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .count-card,
+      .status-card {
+        min-width: 0;
+      }
+
+      .member-list {
+        max-height: min(58vh, 460px);
+        padding-bottom: 6px;
+      }
+
+      .member-browser {
+        grid-template-columns: 1fr;
+      }
+
+      .alphabet-nav {
+        position: static;
+        display: flex;
+        flex-wrap: wrap;
+      }
+
+      .alphabet-nav button {
+        flex: 1 0 24px;
+        height: 28px;
+      }
+
+      textarea {
+        min-height: 210px;
+      }
+
+      .action-bar button {
+        width: 100%;
+      }
     }
 
   </style>
 </head>
 
 <body>
-  <a class="view-comp-link" href="{{ url_for('bracket') }}">View Competition</a>
+  <header>
+    <h1>Register Players</h1>
+    <div class="week-badge">{{ competition.display }}</div>
+    <div class="nav-actions">
+      <a class="secondary" href="{{ url_for('payments') }}">Payments</a>
+      <a href="{{ url_for('executive_games') }}">Executive Games</a>
+    </div>
+  </header>
 
-  <h1>Register Players</h1>
-
-  <div class="counts">
-    <div class="count-card status-card">
-      <div class="count-label">Competition Status</div>
-      <div class="status-value {% if has_initial_comp %}status-active{% else %}status-inactive{% endif %}">
-        <span class="status-dot"></span>
-        {% if has_initial_comp %}Active{% else %}Inactive{% endif %}
+  <main>
+    <div class="counts">
+      <div class="count-card status-card">
+        <div class="count-label">Competition Status</div>
+        <div class="status-value {% if has_initial_comp %}status-active{% else %}status-inactive{% endif %}">
+          <span class="status-dot"></span>
+          {% if has_initial_comp %}Active{% else %}Inactive{% endif %}
+        </div>
+      </div>
+      <div class="count-card">
+        <div class="count-label">Total Players</div>
+        <div class="count-value">{{ counts.total_players }}</div>
+      </div>
+      <div class="count-card">
+        <div class="count-label">Late Players</div>
+        <div class="count-value">{{ counts.late_players }}</div>
+      </div>
+      <div class="count-card">
+        <div class="count-label">Buybacks</div>
+        <div class="count-value">{{ counts.buybacks }}</div>
       </div>
     </div>
-    <div class="count-card">
-      <div class="count-label">Total Players</div>
-      <div class="count-value">{{ counts.total_players }}</div>
-    </div>
-    <div class="count-card">
-      <div class="count-label">Late Players</div>
-      <div class="count-value">{{ counts.late_players }}</div>
-    </div>
-    <div class="count-card">
-      <div class="count-label">Buybacks</div>
-      <div class="count-value">{{ counts.buybacks }}</div>
-    </div>
-  </div>
 
   <form method="POST" id="register-form" autocomplete="off">
+    <input type="hidden" name="registration_client_id" id="registration-client-id" value="">
+    <input type="hidden" name="registration_version" id="registration-version" value="{{ registration_state.version }}">
     <div class="layout">
-
-      <div class="panel">
-        <h2>Known Players</h2>
-        <div class="member-edit-row">
-          <a class="button-link" href="{{ url_for('edit_members') }}">Edit Members</a>
-          <span class="member-count">{{ known_players|length }} known / {{ members|length }} members</span>
-        </div>
-        <div class="member-tools">
-          <label>
-            <input type="radio" name="member_sort" value="first" checked>
-            First name
-          </label>
-          <label>
-            <input type="radio" name="member_sort" value="last">
-            Last name
-          </label>
-          <label>
-            <input type="checkbox" id="show-members" checked>
-            Members
-          </label>
-          <label>
-            <input type="checkbox" id="show-non-members" checked>
-            Non-members
-          </label>
-        </div>
-        <div class="member-browser">
-          <div class="alphabet-nav" id="alphabet-nav"></div>
-          <div class="member-list" id="member-list">
-            {% for player in known_players %}
-              <label
-                class="member-row {% if player.is_member %}is-member{% else %}is-non-member{% endif %}"
-                data-name="{{ player.name }}"
-                data-is-member="{{ player.is_member | tojson }}"
-              >
-                <input
-                  type="checkbox"
-                  value="{{ player.name }}"
-                  {% if player.name in initial_signups %}checked{% endif %}
-                >
-                <span>{{ player.name }}</span>
-                <span class="player-type">{% if player.is_member %}Member{% else %}Non-member{% endif %}</span>
-              </label>
-            {% endfor %}
-          </div>
-        </div>
-      </div>
 
       {% if has_initial_comp %}
       <div class="panel">
@@ -377,7 +502,7 @@
         <p>Added into empty first-round slots without resetting the comp.</p>
 
         <div class="textarea-wrap">
-          <textarea id="late_players" name="late_players"></textarea>
+          <textarea id="late_players" name="late_players">{{ registration_state.late_players }}</textarea>
           <div class="autocomplete-hint" aria-hidden="true"></div>
         </div>
         </div>
@@ -390,7 +515,7 @@
         <p>Added into empty first-round slots with an automatic asterisk.</p>
 
         <div class="textarea-wrap">
-          <textarea id="buybacks" name="buybacks"></textarea>
+          <textarea id="buybacks" name="buybacks">{{ registration_state.buybacks }}</textarea>
           <div class="autocomplete-hint" aria-hidden="true"></div>
         </div>
         </div>
@@ -403,7 +528,7 @@
         <p>Used when generating the initial comp.</p>
 
         <div class="textarea-wrap">
-          <textarea id="new_players" name="new_players"></textarea>
+          <textarea id="new_players" name="new_players">{{ registration_state.new_players }}</textarea>
           <div class="autocomplete-hint" aria-hidden="true"></div>
         </div>
         </div>
@@ -412,23 +537,73 @@
         </div>
 
         {% if has_initial_comp %}
-        <button type="submit" name="action" value="add_late">
-        Add Late Players
-        </button>
+        <div class="action-bar">
+          <button type="submit" name="action" value="add_late">
+            Add Late Players
+          </button>
 
-        <button type="submit" name="action" value="add_buybacks">
-        Add Buybacks
-        </button>
+          <button type="submit" name="action" value="add_buybacks">
+            Add Buybacks
+          </button>
 
-        <button type="submit" name="action" value="end_comp">
-        End Comp
-        </button>
+          <button class="danger" type="submit" name="action" value="end_comp">
+            End Comp
+          </button>
+        </div>
         {% else %}
-        <button type="submit" name="action" value="generate">
-        Generate Initial Comp
-        </button>
+        <div class="action-bar">
+          <button type="submit" name="action" value="generate">
+            Generate Initial Comp
+          </button>
+        </div>
         {% endif %}
   </form>
+
+  <div class="panel known-players-panel">
+    <h2>Known Players</h2>
+    <div class="member-edit-row">
+      <a class="button-link" href="{{ url_for('edit_members') }}">Edit Members</a>
+      <span class="member-count">{{ known_players|length }} known / {{ members|length }} members</span>
+    </div>
+    <div class="member-tools">
+      <label>
+        <input type="radio" name="member_sort" value="first" checked>
+        First name
+      </label>
+      <label>
+        <input type="radio" name="member_sort" value="last">
+        Last name
+      </label>
+      <label>
+        <input type="checkbox" id="show-members" checked>
+        Members
+      </label>
+      <label>
+        <input type="checkbox" id="show-non-members" checked>
+        Non-members
+      </label>
+    </div>
+    <div class="member-browser">
+      <div class="alphabet-nav" id="alphabet-nav"></div>
+      <div class="member-list" id="member-list">
+        {% for player in known_players %}
+          <label
+            class="member-row {% if player.is_member %}is-member{% else %}is-non-member{% endif %}"
+            data-name="{{ player.name }}"
+            data-is-member="{{ player.is_member | tojson }}"
+          >
+            <input
+              type="checkbox"
+              value="{{ player.name }}"
+              {% if player.name in initial_signups %}checked{% endif %}
+            >
+            <span>{{ player.name }}</span>
+            <span class="player-type">{% if player.is_member %}Member{% else %}Non-member{% endif %}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
 
   <div class="panel" style="margin-top: 24px;">
     <h2>Player Elo Ratings</h2>
@@ -462,9 +637,12 @@
     </table>
   </div>
 
+  </main>
 
 <script>
 const registerForm = document.getElementById("register-form");
+const registrationClientField = document.getElementById("registration-client-id");
+const registrationVersionField = document.getElementById("registration-version");
 const memberList = document.getElementById("member-list");
 const alphabetNav = document.getElementById("alphabet-nav");
 const newPlayersField = document.getElementById("new_players");
@@ -476,6 +654,20 @@ const knownPlayerSuggestions = {{ known_players | map(attribute="name") | list |
 const showMembersToggle = document.getElementById("show-members");
 const showNonMembersToggle = document.getElementById("show-non-members");
 const autocompleteState = new Map();
+const teamSeparatorPattern = /[\/&+,.]| {2,}/;
+const teamSeparatorFinderPattern = /[\/&+,.]| {2,}/g;
+const autocompleteSwipeMinX = 48;
+const autocompleteSwipeMaxY = 42;
+const autocompleteSwipeMaxMs = 900;
+const registrationStateUrl = {{ url_for("registration_state_route") | tojson }};
+const registrationPollMs = 1500;
+const registrationSaveDelayMs = 250;
+let registrationClientId = "";
+let registrationVersion = {{ registration_state.version | tojson }};
+let registrationSaveTimer = null;
+let registrationSaveInFlight = false;
+let registrationSaveAgain = false;
+let registrationSubmitting = false;
 
 const fieldForAction = {
   generate: "new_players",
@@ -483,11 +675,147 @@ const fieldForAction = {
   add_buybacks: "buybacks"
 };
 
+function createRegistrationClientId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getRegistrationClientId() {
+  const storageKey = "poolCompRegistrationClientId";
+
+  try {
+    let storedId = window.localStorage.getItem(storageKey);
+
+    if (!storedId) {
+      storedId = createRegistrationClientId();
+      window.localStorage.setItem(storageKey, storedId);
+    }
+
+    return storedId;
+  } catch (error) {
+    return createRegistrationClientId();
+  }
+}
+
+function setRegistrationVersion(version) {
+  const numericVersion = Number(version);
+  if (!Number.isFinite(numericVersion)) return;
+
+  registrationVersion = numericVersion;
+  registrationVersionField.value = String(numericVersion);
+}
+
+function registrationPayload() {
+  const payload = {
+    client_id: registrationClientId,
+    known_version: registrationVersion
+  };
+
+  textareas.forEach(field => {
+    payload[field.id] = field.value;
+  });
+
+  return payload;
+}
+
+function scheduleRegistrationStateSave(delay = registrationSaveDelayMs) {
+  if (registrationSubmitting) return;
+
+  window.clearTimeout(registrationSaveTimer);
+  registrationSaveTimer = window.setTimeout(() => {
+    saveRegistrationState();
+  }, delay);
+}
+
+async function saveRegistrationState() {
+  if (registrationSubmitting) return;
+
+  window.clearTimeout(registrationSaveTimer);
+  registrationSaveTimer = null;
+
+  if (registrationSaveInFlight) {
+    registrationSaveAgain = true;
+    return;
+  }
+
+  registrationSaveInFlight = true;
+
+  try {
+    const response = await fetch(registrationStateUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(registrationPayload())
+    });
+    const state = await response.json();
+
+    if (response.status === 409 || state.refresh) {
+      window.location.reload();
+      return;
+    }
+
+    if (response.ok) {
+      setRegistrationVersion(state.version);
+    }
+  } catch (error) {
+    // A later keystroke or poll will try again; don't interrupt registration.
+  } finally {
+    registrationSaveInFlight = false;
+
+    if (registrationSaveAgain) {
+      registrationSaveAgain = false;
+      scheduleRegistrationStateSave(0);
+    }
+  }
+}
+
+async function pollRegistrationState() {
+  if (registrationSubmitting) return;
+
+  try {
+    const response = await fetch(registrationStateUrl, {
+      cache: "no-store"
+    });
+    if (!response.ok) return;
+
+    const state = await response.json();
+    const remoteVersion = Number(state.version);
+
+    if (!Number.isFinite(remoteVersion) || remoteVersion <= registrationVersion) {
+      return;
+    }
+
+    if ((state.last_client_id || "") !== registrationClientId) {
+      window.location.reload();
+      return;
+    }
+
+    setRegistrationVersion(remoteVersion);
+  } catch (error) {
+    // If the server is briefly busy, keep the current page usable.
+  }
+}
+
 function playerLines(field) {
   return field.value
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean);
+}
+
+function playersFromLine(line) {
+  return line
+    .split(teamSeparatorPattern)
+    .map(name => name.trim())
+    .filter(Boolean);
+}
+
+function playerNamesFromLines(lines) {
+  return lines.flatMap(playersFromLine);
 }
 
 function updateLineCount(field) {
@@ -600,12 +928,41 @@ function removeMemberFromTargetField(name) {
 }
 
 function syncMemberCheckboxesFromTargetField() {
-  const selectedNames = new Set(playerLines(memberTargetField()));
+  const selectedNames = new Set(playerNamesFromLines(playerLines(memberTargetField())));
 
   memberRows.forEach(row => {
     const checkbox = row.querySelector("input[type='checkbox']");
     checkbox.checked = selectedNames.has(row.dataset.name || "");
   });
+}
+
+function teamSegmentBounds(line, lineCursor) {
+  let segmentStart = 0;
+  let segmentEnd = line.length;
+  let match;
+
+  teamSeparatorFinderPattern.lastIndex = 0;
+
+  while ((match = teamSeparatorFinderPattern.exec(line)) !== null) {
+    const separatorStart = match.index;
+    const separatorEnd = separatorStart + match[0].length;
+
+    if (separatorEnd <= lineCursor) {
+      segmentStart = separatorEnd;
+      continue;
+    }
+
+    if (separatorStart >= lineCursor) {
+      segmentEnd = separatorStart;
+      break;
+    }
+
+    segmentStart = separatorEnd;
+    segmentEnd = separatorEnd;
+    break;
+  }
+
+  return { start: segmentStart, end: segmentEnd };
 }
 
 function activeLineInfo(field) {
@@ -614,15 +971,23 @@ function activeLineInfo(field) {
   const lineStart = beforeCursor.lastIndexOf("\n") + 1;
   const lineEndIndex = field.value.indexOf("\n", cursor);
   const lineEnd = lineEndIndex === -1 ? field.value.length : lineEndIndex;
-  const prefix = field.value.slice(lineStart, cursor);
-  const suffix = field.value.slice(cursor, lineEnd);
   const line = field.value.slice(lineStart, lineEnd);
+  const lineCursor = cursor - lineStart;
+  const bounds = teamSegmentBounds(line, lineCursor);
+  const segmentStart = lineStart + bounds.start;
+  const segmentEnd = lineStart + bounds.end;
+  const prefix = field.value.slice(segmentStart, cursor);
+  const suffix = field.value.slice(cursor, segmentEnd);
+  const segment = field.value.slice(segmentStart, segmentEnd);
 
   return {
     cursor,
     lineStart,
     lineEnd,
     line,
+    segmentStart,
+    segmentEnd,
+    segment,
     prefix,
     suffix,
     query: prefix.trimStart()
@@ -633,7 +998,7 @@ function matchingSuggestions(field, query, currentValue = "") {
   const normalizedQuery = query.toLocaleLowerCase();
   const normalizedCurrentValue = currentValue.toLocaleLowerCase();
   const existing = new Set(
-    playerLines(field)
+    playerNamesFromLines(playerLines(field))
       .filter(name => name.toLocaleLowerCase() !== normalizedCurrentValue)
       .map(name => name.toLocaleLowerCase())
   );
@@ -646,11 +1011,15 @@ function matchingSuggestions(field, query, currentValue = "") {
   });
 }
 
+function visibleAutocompleteOptions(completion) {
+  return completion.options.map((option, index) => ({ option, index }));
+}
+
 function completionForField(field) {
   const info = activeLineInfo(field);
   const previous = autocompleteState.get(field.id);
 
-  if (previous && info.line === previous.currentValue && !info.suffix.trim()) {
+  if (previous && info.segment === previous.currentValue && !info.suffix.trim()) {
     return {
       ...previous,
       fromState: true,
@@ -662,7 +1031,7 @@ function completionForField(field) {
   const query = info.query;
   if (!query || info.suffix.trim()) return null;
 
-  const options = matchingSuggestions(field, query, info.line);
+  const options = matchingSuggestions(field, query, info.segment);
   if (!options.length) return null;
 
   return {
@@ -735,46 +1104,62 @@ function updateAutocompleteHint(field) {
   }
 
   const caret = caretPosition(field);
-  hint.style.left = `${Math.min(caret.left + 12, field.clientWidth - 48)}px`;
-  hint.style.top = `${caret.top + 9}px`;
-  hint.style.maxWidth = `${Math.max(field.clientWidth - caret.left - 24, 80)}px`;
+  const hintWidth = Math.min(280, Math.max(field.clientWidth - 20, 160));
+  const hintLeft = Math.min(
+    Math.max(caret.left + 12, 10),
+    Math.max(field.clientWidth - hintWidth - 10, 10)
+  );
+  hint.style.left = `${hintLeft}px`;
+  hint.style.top = `${caret.top + caret.lineHeight + 10}px`;
+  hint.style.width = `${hintWidth}px`;
   hint.textContent = "";
 
-  const key = document.createElement("span");
+  const key = document.createElement("div");
   key.className = "suggestion-key";
-  key.textContent = completion.options.length > 1
-    ? `Tab ${completion.index + 1}/${completion.options.length}`
-    : "Tab";
+  const actionLabel = window.matchMedia("(pointer: coarse)").matches ? "Swipe" : "Tab";
+  key.textContent = `${actionLabel} ${completion.index + 1}/${completion.options.length}`;
   hint.appendChild(key);
-  hint.append(document.createTextNode(suggestion));
+
+  const options = document.createElement("div");
+  options.className = "autocomplete-options";
+  visibleAutocompleteOptions(completion).forEach(({ option, index }) => {
+    const row = document.createElement("div");
+    row.className = `autocomplete-option${index === completion.index ? " active" : ""}`;
+    row.textContent = option;
+    row.dataset.index = String(index);
+    row.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      acceptAutocompleteSuggestionAtIndex(field, index);
+      field.focus({ preventScroll: true });
+    });
+    options.appendChild(row);
+  });
+  hint.appendChild(options);
 
   wrap.classList.add("has-suggestion");
 }
 
-function acceptAutocompleteSuggestion(field, direction = 1) {
+function acceptAutocompleteSuggestionAtIndex(field, index) {
   const completion = completionForField(field);
   const suggestion = completion?.suggestion || null;
   if (!suggestion) return false;
 
   const info = completion.info;
   const indentation = info.prefix.match(/^\s*/)?.[0] || "";
-  const index = completion.options.length > 1
-    ? (completion.fromState ? completion.index + direction + completion.options.length : 0) % completion.options.length
-    : completion.index;
   const nextSuggestion = completion.options[index] || suggestion;
-  const beforeLine = field.value.slice(0, info.lineStart);
-  const afterLine = field.value.slice(info.lineEnd);
-  const completedLine = `${indentation}${nextSuggestion}`;
-  const nextCursor = beforeLine.length + completedLine.length;
+  const beforeSegment = field.value.slice(0, info.segmentStart);
+  const afterSegment = field.value.slice(info.segmentEnd);
+  const completedSegment = `${indentation}${nextSuggestion}`;
+  const nextCursor = beforeSegment.length + completedSegment.length;
 
-  field.value = beforeLine + completedLine + afterLine;
+  field.value = beforeSegment + completedSegment + afterSegment;
   field.selectionStart = nextCursor;
   field.selectionEnd = nextCursor;
   autocompleteState.set(field.id, {
     baseQuery: completion.baseQuery,
     options: completion.options,
     index,
-    currentValue: completedLine
+    currentValue: completedSegment
   });
 
   updateLineCount(field);
@@ -784,7 +1169,67 @@ function acceptAutocompleteSuggestion(field, direction = 1) {
   }
 
   updateAutocompleteHint(field);
+  scheduleRegistrationStateSave(0);
   return true;
+}
+
+function acceptAutocompleteSuggestion(field, direction = 1) {
+  const completion = completionForField(field);
+  const suggestion = completion?.suggestion || null;
+  if (!suggestion) return false;
+
+  const index = completion.options.length > 1
+    ? (completion.fromState ? completion.index + direction + completion.options.length : 0) % completion.options.length
+    : completion.index;
+
+  return acceptAutocompleteSuggestionAtIndex(field, index);
+}
+
+function enableSwipeAutocomplete(field) {
+  let swipeStart = null;
+
+  field.addEventListener("touchstart", (event) => {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+
+    swipeStart = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now()
+    };
+  }, { passive: true });
+
+  field.addEventListener("touchend", (event) => {
+    if (!swipeStart) return;
+
+    const touch = event.changedTouches[0];
+    if (!touch) {
+      swipeStart = null;
+      return;
+    }
+
+    const dx = touch.clientX - swipeStart.x;
+    const dy = touch.clientY - swipeStart.y;
+    const elapsed = Date.now() - swipeStart.time;
+    swipeStart = null;
+
+    if (
+      dx < autocompleteSwipeMinX ||
+      Math.abs(dy) > autocompleteSwipeMaxY ||
+      elapsed > autocompleteSwipeMaxMs
+    ) {
+      return;
+    }
+
+    if (acceptAutocompleteSuggestion(field, 1)) {
+      event.preventDefault();
+      field.focus({ preventScroll: true });
+    }
+  }, { passive: false });
+
+  field.addEventListener("touchcancel", () => {
+    swipeStart = null;
+  }, { passive: true });
 }
 
 document.querySelectorAll("input[name='member_sort']").forEach(input => {
@@ -806,6 +1251,8 @@ memberRows.forEach(row => {
     } else {
       removeMemberFromTargetField(name);
     }
+
+    scheduleRegistrationStateSave(0);
   });
 });
 
@@ -819,6 +1266,7 @@ textareas.forEach(field => {
     }
 
     updateAutocompleteHint(field);
+    scheduleRegistrationStateSave();
   });
 
   field.addEventListener("keydown", (event) => {
@@ -831,7 +1279,11 @@ textareas.forEach(field => {
     field.addEventListener(eventName, () => updateAutocompleteHint(field));
   });
 
-  field.addEventListener("blur", () => updateAutocompleteHint(field));
+  field.addEventListener("blur", () => {
+    updateAutocompleteHint(field);
+    scheduleRegistrationStateSave(0);
+  });
+  enableSwipeAutocomplete(field);
 });
 
 registerForm.addEventListener("submit", (event) => {
@@ -843,22 +1295,22 @@ registerForm.addEventListener("submit", (event) => {
     return;
   }
 
+  registrationSubmitting = true;
+  registrationClientField.value = registrationClientId;
+  registrationVersionField.value = String(registrationVersion);
+
   const fieldId = fieldForAction[action];
-
   if (!fieldId) return;
-
-  const field = document.getElementById(fieldId);
-
-  // Let the browser build and send the POST body first, then clear the matching box.
-  setTimeout(() => {
-    field.value = "";
-  }, 0);
 });
 
+registrationClientId = getRegistrationClientId();
+registrationClientField.value = registrationClientId;
+setRegistrationVersion(registrationVersion);
 renderAlphabetNav();
 sortMembers();
 updateAllLineCounts();
 syncMemberCheckboxesFromTargetField();
+window.setInterval(pollRegistrationState, registrationPollMs);
 </script>
 </body>
 </html>

@@ -1,9 +1,18 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, Response, render_template, request, redirect, url_for
 from memberlist import members as default_members
+from payment_report import (
+    build_payment_report_pdf,
+    clean_date,
+    competition_week,
+    competition_week_label,
+    format_comp_date,
+)
 
+import datetime as dt
 import json
 import os
 import random
+import re
 import sqlite3
 from contextlib import closing
 
@@ -18,6 +27,63 @@ KNOWN_PLAYERS_FILE = os.path.join(BASE_DIR, "known_players.json")
 DEFAULT_ELO = 1000
 ELO_K_FACTOR = 32
 APP_STATE_ID = 1
+TEAM_SEPARATOR_RE = re.compile(r"(?:[&+/,.]|\s{2,})")
+RATING_TEAM_SEPARATOR_RE = re.compile(r"(?:[&+/,]|\s{2,})")
+REGISTRATION_STATE_ID = 1
+FINANCE_STATE_ID = 1
+REGISTRATION_FIELDS = ("new_players", "late_players", "buybacks")
+SIDE_ROUNDS = [32, 16, 8, 4, 2, 1]
+GAME_ROUND_LABELS = {
+    0: "First Round",
+    1: "Second Round",
+    2: "Third Round",
+    3: "Quarter Final",
+    4: "Semi Final",
+    "final": "Final",
+}
+GAME_ROUND_SHORT_LABELS = {
+    0: "First",
+    1: "Second",
+    2: "Third",
+    3: "Quarter",
+    4: "Semi",
+    "final": "Final",
+}
+GAME_ROUND_NUMBER_LABELS = {
+    0: "First Round",
+    1: "Second Round",
+    2: "Third Round",
+    3: "Fourth Round",
+    4: "Fifth Round",
+    5: "Sixth Round",
+}
+ROUND_ROBIN_FINAL_SHORT_LABEL = "RR Final"
+ROUND_ORDER = [0, 1, 2, 3, 4, "final"]
+TABLE_COUNT = 3
+PRESET_WINNINGS = {
+    32: {1: 45.0, 2: 30.0, 3: 15.0},
+    48: {1: 50.0, 2: 35.0, 3: 25.0},
+    64: {1: 60.0, 2: 45.0, 3: 30.0},
+}
+PAYOUT_PLACES = (1, 2, 3)
+
+
+def competition_context_for_date(date_key=None):
+    comp_date = clean_date(date_key or today_key())
+    return {
+        "date": comp_date.isoformat(),
+        "date_label": format_comp_date(comp_date),
+        "week": competition_week(comp_date),
+        "week_label": competition_week_label(comp_date),
+        "display": f"{format_comp_date(comp_date)} ({competition_week_label(comp_date)})",
+    }
+
+
+@app.context_processor
+def inject_competition_context():
+    return {
+        "competition": competition_context_for_date()
+    }
 
 
 def get_db():
@@ -32,6 +98,8 @@ def get_db():
 def init_db():
     with closing(get_db()) as conn:
         ensure_app_state_schema(conn)
+        ensure_registration_state_schema(conn)
+        ensure_finance_state_schema(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS players (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,6 +155,101 @@ def init_db():
         conn.commit()
 
 
+def ensure_registration_state_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS registration_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            new_players TEXT NOT NULL DEFAULT '',
+            late_players TEXT NOT NULL DEFAULT '',
+            buybacks TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 0,
+            last_client_id TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO registration_state (
+            id, new_players, late_players, buybacks,
+            version, last_client_id, updated_at
+        ) VALUES (?, '', '', '', 0, '', CURRENT_TIMESTAMP)
+    """, (REGISTRATION_STATE_ID,))
+
+
+def ensure_finance_state_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS finance_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            entry_fee REAL NOT NULL DEFAULT 0,
+            winnings_total REAL NOT NULL DEFAULT 0,
+            payments TEXT NOT NULL DEFAULT '{}',
+            payout_mode TEXT NOT NULL DEFAULT 'preset',
+            comp_size INTEGER NOT NULL DEFAULT 64,
+            first_winnings REAL NOT NULL DEFAULT 60,
+            second_winnings REAL NOT NULL DEFAULT 45,
+            third_winnings REAL NOT NULL DEFAULT 30,
+            winners TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(finance_state)").fetchall()
+    }
+    finance_columns = {
+        "payout_mode": "TEXT NOT NULL DEFAULT 'preset'",
+        "comp_size": "INTEGER NOT NULL DEFAULT 64",
+        "first_winnings": "REAL NOT NULL DEFAULT 60",
+        "second_winnings": "REAL NOT NULL DEFAULT 45",
+        "third_winnings": "REAL NOT NULL DEFAULT 30",
+        "winners": "TEXT NOT NULL DEFAULT '{}'",
+    }
+
+    for column, definition in finance_columns.items():
+        if column not in columns:
+            conn.execute(f"ALTER TABLE finance_state ADD COLUMN {column} {definition}")
+
+    conn.execute("""
+        INSERT OR IGNORE INTO finance_state (
+            id, entry_fee, winnings_total, payments, payout_mode, comp_size,
+            first_winnings, second_winnings, third_winnings, winners, updated_at
+        ) VALUES (?, 0, 0, '{}', 'preset', 64, 60, 45, 30, '{}', CURRENT_TIMESTAMP)
+    """, (FINANCE_STATE_ID,))
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comp_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comp_date TEXT NOT NULL,
+            semester_key TEXT NOT NULL,
+            year_key TEXT NOT NULL,
+            placement INTEGER NOT NULL,
+            winner_name TEXT NOT NULL,
+            base_winnings REAL NOT NULL DEFAULT 0,
+            adjusted_winnings REAL NOT NULL DEFAULT 0,
+            is_buyback INTEGER NOT NULL DEFAULT 0,
+            is_halved INTEGER NOT NULL DEFAULT 0,
+            half_reason TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(comp_date, placement)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS finance_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comp_date TEXT NOT NULL UNIQUE,
+            semester_key TEXT NOT NULL,
+            year_key TEXT NOT NULL,
+            total_players INTEGER NOT NULL DEFAULT 0,
+            paid_count INTEGER NOT NULL DEFAULT 0,
+            total_income REAL NOT NULL DEFAULT 0,
+            winnings_total REAL NOT NULL DEFAULT 0,
+            profit_loss REAL NOT NULL DEFAULT 0,
+            payments TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
 def json_dumps_compact(value):
     return json.dumps(value, separators=(",", ":"))
 
@@ -109,9 +272,13 @@ def create_app_state_table(conn):
             right_slots TEXT NOT NULL,
             advancements TEXT NOT NULL,
             active_matches TEXT NOT NULL,
+            active_tables TEXT NOT NULL DEFAULT '{}',
             replacement_slots TEXT NOT NULL,
+            champion TEXT NOT NULL DEFAULT '',
+            round_robin_scores TEXT NOT NULL DEFAULT '{}',
             late_players INTEGER NOT NULL DEFAULT 0,
             buybacks INTEGER NOT NULL DEFAULT 0,
+            state_version INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -132,16 +299,21 @@ def save_state_with_conn(conn, state):
         """
         INSERT INTO app_state (
             id, left_slots, right_slots, advancements, active_matches,
-            replacement_slots, late_players, buybacks, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            active_tables, replacement_slots, champion, round_robin_scores,
+            late_players, buybacks, state_version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO UPDATE SET
             left_slots = excluded.left_slots,
             right_slots = excluded.right_slots,
             advancements = excluded.advancements,
             active_matches = excluded.active_matches,
+            active_tables = excluded.active_tables,
             replacement_slots = excluded.replacement_slots,
+            champion = excluded.champion,
+            round_robin_scores = excluded.round_robin_scores,
             late_players = excluded.late_players,
             buybacks = excluded.buybacks,
+            state_version = app_state.state_version + 1,
             updated_at = CURRENT_TIMESTAMP
         """,
         (
@@ -150,7 +322,10 @@ def save_state_with_conn(conn, state):
             json_dumps_compact(state.get("right", [])),
             json_dumps_compact(state.get("advancements", {})),
             json_dumps_compact(state.get("active_matches", [])),
+            json_dumps_compact(state.get("active_tables", {})),
             json_dumps_compact(state.get("replacement_slots", [])),
+            state.get("champion", ""),
+            json_dumps_compact(state.get("round_robin_scores", {})),
             int(counts.get("late_players", 0)),
             int(counts.get("buybacks", 0)),
         )
@@ -164,12 +339,24 @@ def ensure_app_state_schema(conn):
         create_app_state_table(conn)
         return
 
-    typed_columns = {
+    base_typed_columns = {
         "id", "left_slots", "right_slots", "advancements", "active_matches",
         "replacement_slots", "late_players", "buybacks", "updated_at"
     }
 
-    if typed_columns.issubset(columns):
+    if base_typed_columns.issubset(columns):
+        if "champion" not in columns:
+            conn.execute("ALTER TABLE app_state ADD COLUMN champion TEXT NOT NULL DEFAULT ''")
+
+        if "state_version" not in columns:
+            conn.execute("ALTER TABLE app_state ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0")
+
+        if "round_robin_scores" not in columns:
+            conn.execute("ALTER TABLE app_state ADD COLUMN round_robin_scores TEXT NOT NULL DEFAULT '{}'")
+
+        if "active_tables" not in columns:
+            conn.execute("ALTER TABLE app_state ADD COLUMN active_tables TEXT NOT NULL DEFAULT '{}'")
+
         return
 
     legacy_state = None
@@ -195,9 +382,34 @@ def clean_player_name(name):
     return str(name or "").strip().rstrip("*").strip()
 
 
-def get_or_create_player(conn, name):
+def has_full_player_name(name):
+    parts = str(name or "").strip().split()
+
+    if len(parts) < 2:
+        return False
+
+    last_name = re.sub(r"[^A-Za-z0-9]", "", parts[-1].rstrip("."))
+    return len(last_name) > 1
+
+
+def clean_elo_player_name(name):
     clean_name = clean_player_name(name)
+
+    if not clean_name or RATING_TEAM_SEPARATOR_RE.search(clean_name):
+        return ""
+
+    if not has_full_player_name(clean_name):
+        return ""
+
+    return clean_name
+
+
+def get_or_create_player(conn, name):
+    clean_name = clean_elo_player_name(name)
     if not clean_name:
+        return None
+
+    if not is_known_player_alias(clean_name):
         return None
 
     conn.execute(
@@ -213,8 +425,7 @@ def get_or_create_player(conn, name):
 def ensure_players_exist(names):
     with closing(get_db()) as conn:
         for name in names:
-            if clean_player_name(name):
-                get_or_create_player(conn, name)
+            get_or_create_player(conn, name)
         conn.commit()
 
 
@@ -259,7 +470,7 @@ def unique_names(names):
     seen_names = set()
 
     for value in names:
-        name = str(value or "").strip()
+        name = clean_known_player_name(value)
         key = name.casefold()
 
         if name and key not in seen_names:
@@ -267,6 +478,40 @@ def unique_names(names):
             seen_names.add(key)
 
     return clean_names
+
+
+def clean_known_player_name(value):
+    name = clean_player_name(value)
+
+    if not name or TEAM_SEPARATOR_RE.search(name):
+        return ""
+
+    if not has_full_player_name(name):
+        return ""
+
+    return name
+
+
+def known_player_aliases():
+    aliases = set()
+
+    for name in load_known_player_names():
+        aliases.add(name.casefold())
+
+        short_name = clean_player_name(bracket_name(name))
+        if short_name:
+            aliases.add(short_name.casefold())
+
+    return aliases
+
+
+def is_known_player_alias(name):
+    clean_name = clean_elo_player_name(name)
+
+    if not clean_name:
+        return False
+
+    return clean_name.casefold() in known_player_aliases()
 
 
 def sort_names(names):
@@ -287,10 +532,6 @@ def load_known_player_names():
             pass
 
     known_names.extend(load_members())
-
-    with closing(get_db()) as conn:
-        rows = conn.execute("SELECT name FROM players ORDER BY name ASC").fetchall()
-        known_names.extend(row["name"] for row in rows)
 
     return sort_names(unique_names(known_names))
 
@@ -321,12 +562,23 @@ def get_known_players():
     ]
 
 
+def load_known_non_member_names():
+    member_keys = {name.casefold() for name in load_members()}
+
+    return [
+        name
+        for name in load_known_player_names()
+        if name.casefold() not in member_keys
+    ]
+
+
 def load_state():
     with closing(get_db()) as conn:
         row = conn.execute(
             """
             SELECT left_slots, right_slots, advancements, active_matches,
-                   replacement_slots, late_players, buybacks
+                   active_tables, replacement_slots, champion, late_players,
+                   buybacks, round_robin_scores, state_version
             FROM app_state
             WHERE id = ?
             """,
@@ -339,7 +591,11 @@ def load_state():
             "right": json_loads_or_default(row["right_slots"], [""] * 32),
             "advancements": json_loads_or_default(row["advancements"], {}),
             "active_matches": json_loads_or_default(row["active_matches"], []),
+            "active_tables": json_loads_or_default(row["active_tables"], {}),
             "replacement_slots": json_loads_or_default(row["replacement_slots"], []),
+            "champion": row["champion"] or "",
+            "round_robin_scores": json_loads_or_default(row["round_robin_scores"], {}),
+            "_version": int(row["state_version"] or 0),
             "counts": {
                 "late_players": row["late_players"],
                 "buybacks": row["buybacks"],
@@ -364,6 +620,285 @@ def save_state(state):
         save_state_with_conn(conn, state)
         conn.commit()
 
+
+def clean_registration_client_id(client_id):
+    return str(client_id or "")[:80]
+
+
+def registration_state_from_row(row):
+    state = {field: "" for field in REGISTRATION_FIELDS}
+
+    if row:
+        state.update({
+            "new_players": row["new_players"] or "",
+            "late_players": row["late_players"] or "",
+            "buybacks": row["buybacks"] or "",
+            "version": int(row["version"] or 0),
+            "last_client_id": row["last_client_id"] or "",
+            "updated_at": row["updated_at"] or "",
+        })
+    else:
+        state.update({
+            "version": 0,
+            "last_client_id": "",
+            "updated_at": "",
+        })
+
+    return state
+
+
+def load_registration_state_with_conn(conn):
+    ensure_registration_state_schema(conn)
+    row = conn.execute(
+        """
+        SELECT new_players, late_players, buybacks, version,
+               last_client_id, updated_at
+        FROM registration_state
+        WHERE id = ?
+        """,
+        (REGISTRATION_STATE_ID,)
+    ).fetchone()
+
+    return registration_state_from_row(row)
+
+
+def load_registration_state():
+    with closing(get_db()) as conn:
+        return load_registration_state_with_conn(conn)
+
+
+def clean_money_value(value):
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+    return round(max(amount, 0.0), 2)
+
+
+def today_key():
+    return dt.date.today().isoformat()
+
+
+def semester_key_for_date(date_key=None):
+    try:
+        comp_date = dt.date.fromisoformat(str(date_key or today_key()))
+    except ValueError:
+        comp_date = dt.date.today()
+
+    semester = 1 if comp_date.month <= 6 else 2
+    return f"{comp_date.year}-S{semester}"
+
+
+def year_key_for_date(date_key=None):
+    try:
+        comp_date = dt.date.fromisoformat(str(date_key or today_key()))
+    except ValueError:
+        comp_date = dt.date.today()
+
+    return str(comp_date.year)
+
+
+def clean_comp_size(value, fallback=64):
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        size = int(fallback or 64)
+
+    if size in PRESET_WINNINGS:
+        return size
+
+    if size <= 32:
+        return 32
+
+    if size <= 48:
+        return 48
+
+    return 64
+
+
+def default_comp_size_for_players(players):
+    entry_count = len({player["slot_id"] for player in players})
+    return clean_comp_size(entry_count)
+
+
+def clean_payout_mode(value):
+    return "custom" if str(value or "").strip() == "custom" else "preset"
+
+
+def clean_winner_map(value):
+    source = value if isinstance(value, dict) else json_loads_or_default(value, {})
+    winners = {}
+
+    for place in PAYOUT_PLACES:
+        name = str(source.get(str(place), source.get(place, "")) or "").strip()
+        winners[str(place)] = name
+
+    return winners
+
+
+def load_finance_state():
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+        row = conn.execute(
+            """
+            SELECT entry_fee, winnings_total, payments, payout_mode,
+                   comp_size, first_winnings, second_winnings,
+                   third_winnings, winners
+            FROM finance_state
+            WHERE id = ?
+            """,
+            (FINANCE_STATE_ID,)
+        ).fetchone()
+
+    if not row:
+        return {
+            "entry_fee": 0.0,
+            "winnings_total": 0.0,
+            "payments": {},
+            "payout_mode": "preset",
+            "comp_size": 64,
+            "prizes": {1: 60.0, 2: 45.0, 3: 30.0},
+            "winners": clean_winner_map({}),
+        }
+
+    return {
+        "entry_fee": clean_money_value(row["entry_fee"]),
+        "winnings_total": clean_money_value(row["winnings_total"]),
+        "payments": json_loads_or_default(row["payments"], {}),
+        "payout_mode": clean_payout_mode(row["payout_mode"]),
+        "comp_size": clean_comp_size(row["comp_size"]),
+        "prizes": {
+            1: clean_money_value(row["first_winnings"]),
+            2: clean_money_value(row["second_winnings"]),
+            3: clean_money_value(row["third_winnings"]),
+        },
+        "winners": clean_winner_map(row["winners"]),
+    }
+
+
+def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winners):
+    clean_payments = {
+        str(key): bool(value)
+        for key, value in payments.items()
+        if str(key).strip() and bool(value)
+    }
+    clean_prizes = {
+        place: clean_money_value(prizes.get(place, 0))
+        for place in PAYOUT_PLACES
+    }
+    clean_winners = clean_winner_map(winners)
+    payout_mode = clean_payout_mode(payout_mode)
+    comp_size = clean_comp_size(comp_size)
+
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+        conn.execute(
+            """
+            UPDATE finance_state
+            SET entry_fee = ?,
+                winnings_total = ?,
+                payments = ?,
+                payout_mode = ?,
+                comp_size = ?,
+                first_winnings = ?,
+                second_winnings = ?,
+                third_winnings = ?,
+                winners = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                clean_money_value(entry_fee),
+                clean_money_value(sum(clean_prizes.values())),
+                json_dumps_compact(clean_payments),
+                payout_mode,
+                comp_size,
+                clean_prizes[1],
+                clean_prizes[2],
+                clean_prizes[3],
+                json_dumps_compact(clean_winners),
+                FINANCE_STATE_ID,
+            )
+        )
+        conn.commit()
+
+
+def save_registration_state_with_conn(conn, updates, client_id=""):
+    current = load_registration_state_with_conn(conn)
+    values = {
+        field: str(updates.get(field, current[field]) or "")
+        for field in REGISTRATION_FIELDS
+    }
+
+    conn.execute(
+        """
+        UPDATE registration_state
+        SET new_players = ?,
+            late_players = ?,
+            buybacks = ?,
+            version = version + 1,
+            last_client_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            values["new_players"],
+            values["late_players"],
+            values["buybacks"],
+            clean_registration_client_id(client_id),
+            REGISTRATION_STATE_ID,
+        )
+    )
+
+    return load_registration_state_with_conn(conn)
+
+
+def save_registration_state(updates, client_id=""):
+    with closing(get_db()) as conn:
+        state = save_registration_state_with_conn(conn, updates, client_id)
+        conn.commit()
+        return state
+
+
+def touch_registration_state(client_id=""):
+    save_registration_state({}, client_id)
+
+
+def claim_registration_state(known_version, client_id, updates):
+    with closing(get_db()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current_state = load_registration_state_with_conn(conn)
+
+        if is_stale_registration_state(known_version, client_id, current_state):
+            conn.rollback()
+            return False
+
+        save_registration_state_with_conn(conn, updates, client_id)
+        conn.commit()
+        return True
+
+
+def registration_form_updates(form):
+    return {
+        field: form.get(field, "")
+        for field in REGISTRATION_FIELDS
+        if field in form
+    }
+
+
+def is_stale_registration_state(known_version, client_id, current_state):
+    try:
+        known_version = int(known_version)
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        known_version < int(current_state.get("version", 0))
+        and current_state.get("last_client_id", "") != clean_registration_client_id(client_id)
+    )
+
+
 def shorten_name(full_name, buyback=False):
     parts = full_name.strip().split()
 
@@ -376,6 +911,59 @@ def shorten_name(full_name, buyback=False):
         short = f"{parts[0]} {parts[-1][:2]}."
 
     return f"{short}*" if buyback else short
+
+
+def split_team_players(line):
+    players = []
+
+    for name in TEAM_SEPARATOR_RE.split(str(line or "")):
+        clean_name = name.strip()
+
+        if clean_name:
+            players.append(clean_name)
+
+    return players
+
+
+def first_name(name):
+    parts = str(name or "").strip().split()
+    return parts[0] if parts else ""
+
+
+def comp_entry_players(entry):
+    return [
+        name.strip()
+        for name in str(entry or "").strip().rstrip("*").split("/")
+        if name.strip()
+    ]
+
+
+def bracket_name(entry, buyback=False):
+    players = split_team_players(entry)
+
+    if len(players) > 1:
+        short = " / ".join(first_name(player) for player in players if first_name(player))
+    else:
+        short = shorten_name(entry)
+
+    return f"{short}*" if buyback and short else short
+
+
+def player_names_from_entries(entries):
+    players = []
+
+    for entry in entries:
+        players.extend(split_team_players(entry))
+
+    return players
+
+
+def known_player_names_from_entries(entries):
+    return [
+        name
+        for name in (clean_known_player_name(entry) for entry in entries)
+        if name
+    ]
 
 
 def parse_textarea(text):
@@ -397,7 +985,10 @@ def empty_state():
         "right": [""] * 32,
         "advancements": {},
         "active_matches": [],
+        "active_tables": {},
         "replacement_slots": [],
+        "champion": "",
+        "round_robin_scores": {},
         "counts": {
             "late_players": 0,
             "buybacks": 0
@@ -413,7 +1004,14 @@ def normalize_state(state):
     state.setdefault("right", [""] * 32)
     state.setdefault("advancements", {})
     state.setdefault("active_matches", [])
+    state.setdefault("active_tables", {})
+    if not isinstance(state["active_tables"], dict):
+        state["active_tables"] = {}
     state.setdefault("replacement_slots", [])
+    state.setdefault("champion", "")
+    state.setdefault("round_robin_scores", {})
+    if not isinstance(state["round_robin_scores"], dict):
+        state["round_robin_scores"] = {}
     state.setdefault("counts", {})
     state["counts"].setdefault("late_players", 0)
     state["counts"].setdefault("buybacks", 0)
@@ -421,7 +1019,25 @@ def normalize_state(state):
     return state
 
 
+def prune_ineligible_elo_players():
+    with closing(get_db()) as conn:
+        rows = conn.execute("SELECT name FROM players").fetchall()
+        names_to_remove = [
+            row["name"]
+            for row in rows
+            if not is_known_player_alias(row["name"])
+        ]
+
+        if names_to_remove:
+            conn.executemany(
+                "DELETE FROM players WHERE name = ?",
+                [(name,) for name in names_to_remove]
+            )
+            conn.commit()
+
+
 init_db()
+prune_ineligible_elo_players()
 
 
 def get_register_counts():
@@ -433,6 +1049,531 @@ def get_register_counts():
         "late_players": state.get("counts", {}).get("late_players", 0),
         "buybacks": state.get("counts", {}).get("buybacks", 0),
     }
+
+
+def member_aliases_by_status():
+    members = load_members()
+    aliases = {}
+    first_name_counts = {}
+
+    for member in members:
+        first = first_name(member).casefold()
+        if first:
+            first_name_counts[first] = first_name_counts.get(first, 0) + 1
+
+    for member in members:
+        clean_member = clean_player_name(member)
+        if not clean_member:
+            continue
+
+        aliases[clean_member.casefold()] = True
+
+        short_name = clean_player_name(bracket_name(clean_member))
+        if short_name:
+            aliases[short_name.casefold()] = True
+
+        first = first_name(clean_member)
+        if first and first_name_counts.get(first.casefold(), 0) == 1:
+            aliases[first.casefold()] = True
+
+    return aliases
+
+
+def active_comp_players(state=None):
+    state = normalize_state(state or load_state() or empty_state())
+    member_aliases = member_aliases_by_status()
+    players = []
+    seen_keys = set()
+
+    for slot_index, entry in enumerate(state.get("left", []) + state.get("right", [])):
+        if not str(entry or "").strip():
+            continue
+
+        slot_id = f"{'L' if slot_index < 32 else 'R'}-0-{slot_index if slot_index < 32 else slot_index - 32}"
+
+        for player_index, player_name in enumerate(comp_entry_players(entry)):
+            payment_key = f"{slot_id}:{player_index}:{player_name.casefold()}"
+
+            if payment_key in seen_keys:
+                continue
+
+            seen_keys.add(payment_key)
+            players.append({
+                "key": payment_key,
+                "slot_id": slot_id,
+                "player_index": player_index,
+                "entry": entry,
+                "name": player_name,
+                "is_member": player_name.casefold() in member_aliases,
+            })
+
+    return players
+
+
+def is_doubles_comp(players):
+    return any("/" in player["entry"] for player in players)
+
+
+def payment_fee_for_player(player, doubles_comp=False):
+    if doubles_comp:
+        return 3.0
+
+    if str(player.get("entry", "")).strip().endswith("*"):
+        return 4.0
+
+    if player.get("is_member"):
+        return 3.0
+
+    return 4.0
+
+
+def winner_choice_name(entry):
+    return str(entry.get("entry", "") or "").strip()
+
+
+def winner_choice_key(name):
+    return clean_player_name(name).casefold()
+
+
+def payout_prizes_for_state(finance_state, players):
+    comp_size = clean_comp_size(
+        finance_state.get("comp_size"),
+        default_comp_size_for_players(players)
+    )
+    mode = clean_payout_mode(finance_state.get("payout_mode"))
+
+    if mode == "preset":
+        prizes = dict(PRESET_WINNINGS[comp_size])
+    else:
+        prizes = {
+            place: clean_money_value(finance_state.get("prizes", {}).get(place, 0))
+            for place in PAYOUT_PLACES
+        }
+
+    return comp_size, mode, prizes
+
+
+def semester_win_count(conn, winner_name, semester_key, current_comp_date=None):
+    names = [
+        clean_player_name(name).casefold()
+        for name in comp_entry_players(winner_name)
+    ]
+    if not names:
+        names = [clean_player_name(winner_name).casefold()]
+
+    rows = conn.execute(
+        """
+        SELECT winner_name
+        FROM comp_results
+        WHERE placement = 1
+          AND semester_key = ?
+          AND (? IS NULL OR comp_date <> ?)
+          AND winner_name <> ''
+        """,
+        (semester_key, current_comp_date, current_comp_date)
+    ).fetchall()
+    count = 0
+
+    for row in rows:
+        result_names = [
+            clean_player_name(name).casefold()
+            for name in comp_entry_players(row["winner_name"])
+        ] or [clean_player_name(row["winner_name"]).casefold()]
+
+        if any(name and name in result_names for name in names):
+            count += 1
+
+    return count
+
+
+def payout_rows_for_winners(winners, prizes, entries=None, comp_date=None):
+    comp_date = comp_date or today_key()
+    semester_key = semester_key_for_date(comp_date)
+    entry_lookup = {
+        winner_choice_key(winner_choice_name(entry)): entry
+        for entry in (entries or [])
+    }
+    rows = []
+
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+
+        for place in PAYOUT_PLACES:
+            winner_name = str(winners.get(str(place), "") or "").strip()
+            base_winnings = clean_money_value(prizes.get(place, 0))
+            entry = entry_lookup.get(winner_choice_key(winner_name), {})
+            is_buyback = (
+                str(winner_name).strip().endswith("*")
+                or str(entry.get("entry", "")).strip().endswith("*")
+            )
+            semester_wins = semester_win_count(
+                conn,
+                winner_name,
+                semester_key,
+                comp_date
+            ) if winner_name else 0
+            repeat_halved = place == 1 and winner_name and semester_wins + 1 >= 3
+            half_reasons = []
+
+            if is_buyback:
+                half_reasons.append("buyback")
+
+            if repeat_halved:
+                half_reasons.append("third semester win")
+
+            is_halved = bool(half_reasons)
+            adjusted_winnings = round(
+                base_winnings / 2 if is_halved else base_winnings,
+                2
+            )
+
+            rows.append({
+                "place": place,
+                "label": {1: "1st", 2: "2nd", 3: "3rd"}[place],
+                "winner_name": winner_name,
+                "base_winnings": base_winnings,
+                "adjusted_winnings": adjusted_winnings,
+                "is_buyback": is_buyback,
+                "is_halved": is_halved,
+                "half_reason": ", ".join(half_reasons),
+                "semester_wins_before": semester_wins,
+            })
+
+    return rows
+
+
+def completed_round_robin_scoreboard(state=None):
+    state = normalize_state(state or load_state() or empty_state())
+    scoreboard = round_robin_scoreboard_for_state(state)
+
+    if not scoreboard.get("active"):
+        return None
+
+    players = scoreboard.get("players", [])
+    total_score = sum(int(player.get("rank_score", 0)) for player in players)
+
+    if len(players) == 3 and total_score == 3:
+        return scoreboard
+
+    return None
+
+
+def automatic_winners_from_round_robin(state=None):
+    scoreboard = completed_round_robin_scoreboard(state)
+
+    if not scoreboard:
+        return {}, False
+
+    players = scoreboard["players"]
+    scores = [int(player.get("rank_score", 0)) for player in players]
+    is_three_way_tie = len(set(scores)) == 1
+
+    if is_three_way_tie:
+        return {
+            str(place): players[index]["name"]
+            for index, place in enumerate(PAYOUT_PLACES)
+        }, True
+
+    ordered_players = sorted(
+        players,
+        key=lambda player: (
+            -int(player.get("rank_score", 0)),
+            player["name"].casefold()
+        )
+    )
+
+    return {
+        str(place): ordered_players[index]["name"]
+        for index, place in enumerate(PAYOUT_PLACES)
+    }, False
+
+
+def payout_rows_for_round_robin_tie(winners, prizes, entries=None, comp_date=None):
+    split_amount = round(
+        sum(clean_money_value(prizes.get(place, 0)) for place in PAYOUT_PLACES) / 3,
+        2
+    )
+    split_prizes = {place: split_amount for place in PAYOUT_PLACES}
+    rows = payout_rows_for_winners(winners, split_prizes, entries, comp_date)
+
+    for row in rows:
+        row["label"] = "Tie"
+        row["base_winnings"] = split_amount
+        row["adjusted_winnings"] = split_amount
+        row["is_halved"] = False
+        row["half_reason"] = "3-way tie split"
+
+    return rows
+
+
+def save_comp_results_and_snapshot(summary):
+    comp_date = today_key()
+    semester_key = semester_key_for_date(comp_date)
+    year_key = year_key_for_date(comp_date)
+
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+
+        for row in summary["payout_rows"]:
+            if not row["winner_name"]:
+                conn.execute(
+                    "DELETE FROM comp_results WHERE comp_date = ? AND placement = ?",
+                    (comp_date, row["place"])
+                )
+                continue
+
+            conn.execute(
+                """
+                INSERT INTO comp_results (
+                    comp_date, semester_key, year_key, placement, winner_name,
+                    base_winnings, adjusted_winnings, is_buyback, is_halved,
+                    half_reason, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(comp_date, placement) DO UPDATE SET
+                    semester_key = excluded.semester_key,
+                    year_key = excluded.year_key,
+                    winner_name = excluded.winner_name,
+                    base_winnings = excluded.base_winnings,
+                    adjusted_winnings = excluded.adjusted_winnings,
+                    is_buyback = excluded.is_buyback,
+                    is_halved = excluded.is_halved,
+                    half_reason = excluded.half_reason,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    comp_date,
+                    semester_key,
+                    year_key,
+                    row["place"],
+                    row["winner_name"],
+                    row["base_winnings"],
+                    row["adjusted_winnings"],
+                    int(row["is_buyback"]),
+                    int(row["is_halved"]),
+                    row["half_reason"],
+                )
+            )
+
+        conn.execute(
+            """
+            INSERT INTO finance_snapshots (
+                comp_date, semester_key, year_key, total_players, paid_count,
+                total_income, winnings_total, profit_loss, payments, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(comp_date) DO UPDATE SET
+                semester_key = excluded.semester_key,
+                year_key = excluded.year_key,
+                total_players = excluded.total_players,
+                paid_count = excluded.paid_count,
+                total_income = excluded.total_income,
+                winnings_total = excluded.winnings_total,
+                profit_loss = excluded.profit_loss,
+                payments = excluded.payments,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                comp_date,
+                semester_key,
+                year_key,
+                summary["total_players"],
+                summary["paid_count"],
+                summary["total_income"],
+                summary["winnings_total"],
+                summary["profit_loss"],
+                json_dumps_compact({
+                    player["name"]: player["paid"]
+                    for player in summary["players"]
+                }),
+            )
+        )
+        conn.commit()
+
+
+def payment_report_history():
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+        snapshots = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT comp_date, semester_key, year_key, total_players,
+                       paid_count, total_income, winnings_total, profit_loss
+                FROM finance_snapshots
+                ORDER BY comp_date DESC
+                """
+            ).fetchall()
+        ]
+        winners = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT comp_date, semester_key, placement, winner_name,
+                       base_winnings, adjusted_winnings, is_buyback,
+                       is_halved, half_reason
+                FROM comp_results
+                ORDER BY comp_date DESC, placement ASC
+                """
+            ).fetchall()
+        ]
+
+    def grouped_total(key):
+        totals = {}
+        for row in snapshots:
+            group_key = row[key]
+            bucket = totals.setdefault(group_key, {
+                "income": 0.0,
+                "winnings": 0.0,
+                "profit_loss": 0.0,
+            })
+            bucket["income"] = round(bucket["income"] + row["total_income"], 2)
+            bucket["winnings"] = round(bucket["winnings"] + row["winnings_total"], 2)
+            bucket["profit_loss"] = round(bucket["profit_loss"] + row["profit_loss"], 2)
+
+        return [
+            {"key": group_key, **values}
+            for group_key, values in sorted(totals.items(), reverse=True)
+        ]
+
+    return {
+        "snapshots": snapshots,
+        "winners": winners,
+        "winner_grid": winner_history_grid(),
+        "semester_totals": grouped_total("semester_key"),
+        "year_totals": grouped_total("year_key"),
+    }
+
+
+def winner_history_grid(limit=30):
+    with closing(get_db()) as conn:
+        ensure_finance_state_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT comp_date, placement, winner_name, adjusted_winnings,
+                   half_reason
+            FROM comp_results
+            WHERE winner_name <> ''
+            ORDER BY comp_date DESC, placement ASC
+            """
+        ).fetchall()
+
+    weeks = []
+    week_lookup = {}
+
+    for row in rows:
+        comp_date = row["comp_date"]
+
+        if comp_date not in week_lookup:
+            week = {
+                "comp_date": comp_date,
+                "places": {
+                    place: {
+                        "winner_name": "",
+                        "adjusted_winnings": 0.0,
+                        "half_reason": "",
+                    }
+                    for place in PAYOUT_PLACES
+                }
+            }
+            week_lookup[comp_date] = week
+            weeks.append(week)
+
+        week_lookup[comp_date]["places"][row["placement"]] = {
+            "winner_name": row["winner_name"],
+            "adjusted_winnings": clean_money_value(row["adjusted_winnings"]),
+            "half_reason": row["half_reason"] or "",
+        }
+
+    return weeks[:limit]
+
+
+def finance_entries_from_players(players):
+    entries = []
+    entry_by_slot = {}
+
+    for player in players:
+        slot_id = player["slot_id"]
+
+        if slot_id not in entry_by_slot:
+            entry = {
+                "slot_id": slot_id,
+                "entry": player["entry"],
+                "players": [],
+                "total_fee": 0.0,
+            }
+            entry_by_slot[slot_id] = entry
+            entries.append(entry)
+
+        entry_by_slot[slot_id]["players"].append(player)
+        entry_by_slot[slot_id]["total_fee"] = round(
+            entry_by_slot[slot_id]["total_fee"] + player["fee"],
+            2
+        )
+
+    return entries
+
+
+def finance_summary():
+    finance_state = load_finance_state()
+    state = normalize_state(load_state() or empty_state())
+    players = active_comp_players()
+    doubles_comp = is_doubles_comp(players)
+    default_size = default_comp_size_for_players(players)
+    comp_size, payout_mode, prizes = payout_prizes_for_state(finance_state, players)
+    automatic_winners, round_robin_three_way_tie = automatic_winners_from_round_robin(state)
+    winners = automatic_winners or clean_winner_map(finance_state.get("winners"))
+    active_keys = {player["key"] for player in players}
+    payments = {
+        key: paid
+        for key, paid in finance_state.get("payments", {}).items()
+        if key in active_keys
+    }
+    paid_count = sum(1 for paid in payments.values() if paid)
+
+    for player in players:
+        player["paid"] = bool(payments.get(player["key"]))
+        player["fee"] = payment_fee_for_player(player, doubles_comp)
+
+    total_income = round(
+        sum(player["fee"] for player in players if player["paid"]),
+        2
+    )
+    entries = finance_entries_from_players(players)
+    if round_robin_three_way_tie:
+        payout_rows = payout_rows_for_round_robin_tie(winners, prizes, entries)
+    else:
+        payout_rows = payout_rows_for_winners(winners, prizes, entries)
+
+    winnings_total = clean_money_value(
+        sum(row["adjusted_winnings"] for row in payout_rows)
+    )
+
+    return {
+        "players": players,
+        "entries": entries,
+        "winner_choices": [
+            winner_choice_name(entry)
+            for entry in entries
+            if winner_choice_name(entry)
+        ],
+        "doubles_comp": doubles_comp,
+        "preset_winnings": PRESET_WINNINGS,
+        "payout_mode": payout_mode,
+        "comp_size": comp_size,
+        "default_comp_size": default_size,
+        "prizes": prizes,
+        "winners": winners,
+        "automatic_winners": bool(automatic_winners),
+        "round_robin_three_way_tie": round_robin_three_way_tie,
+        "payout_rows": payout_rows,
+        "winnings_total": winnings_total,
+        "paid_count": paid_count,
+        "unpaid_count": len(players) - paid_count,
+        "total_players": len(players),
+        "total_income": total_income,
+        "profit_loss": round(total_income - winnings_total, 2),
+        "winner_history": winner_history_grid(),
+    }
+
 
 def calculate_elo(winner_elo, loser_elo, k_factor=ELO_K_FACTOR):
     expected_winner = 1 / (1 + 10 ** ((loser_elo - winner_elo) / 400))
@@ -458,6 +1599,63 @@ def record_match_result(match_id, winner_name, loser_name):
     with closing(get_db()) as conn:
         winner = get_or_create_player(conn, winner_name)
         loser = get_or_create_player(conn, loser_name)
+
+        if not winner or not loser:
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO match_results (
+                        match_id, winner_name, loser_name,
+                        winner_elo_before, loser_elo_before,
+                        winner_elo_after, loser_elo_after
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        match_id, winner_name, loser_name,
+                        DEFAULT_ELO, DEFAULT_ELO, DEFAULT_ELO, DEFAULT_ELO
+                    )
+                )
+                match_result_id = cursor.lastrowid
+            except sqlite3.IntegrityError:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM match_results
+                    WHERE match_id = ? AND winner_name = ? AND loser_name = ?
+                    """,
+                    (match_id, winner_name, loser_name)
+                ).fetchone()
+
+                return True, {
+                    "already_recorded": True,
+                    "elo_skipped": True,
+                    "match_result_id": existing["id"] if existing else None,
+                    "winner_name": winner_name,
+                    "loser_name": loser_name,
+                }
+
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO game_history (
+                    match_result_id, match_id, winner_name, loser_name,
+                    winner_elo_before, loser_elo_before,
+                    winner_elo_after, loser_elo_after
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    match_result_id, match_id, winner_name, loser_name,
+                    DEFAULT_ELO, DEFAULT_ELO, DEFAULT_ELO, DEFAULT_ELO
+                )
+            )
+            conn.commit()
+
+            return True, {
+                "already_recorded": False,
+                "elo_skipped": True,
+                "match_result_id": match_result_id,
+                "winner_name": winner_name,
+                "loser_name": loser_name,
+            }
 
         winner_after, loser_after = calculate_elo(winner["elo"], loser["elo"])
 
@@ -559,6 +1757,102 @@ def get_game_history(limit=100):
     return [dict(row) for row in rows]
 
 
+def match_results_by_match_id(match_ids):
+    clean_match_ids = [
+        str(match_id or "").strip()
+        for match_id in match_ids
+        if str(match_id or "").strip()
+    ]
+
+    if not clean_match_ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in clean_match_ids)
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM match_results
+            WHERE match_id IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            clean_match_ids
+        ).fetchall()
+
+    results = {}
+
+    for row in rows:
+        results.setdefault(row["match_id"], dict(row))
+
+    return results
+
+
+def undo_match_result_row(conn, row):
+    conn.execute(
+        """
+        UPDATE players
+        SET elo = ?,
+            games_played = MAX(games_played - 1, 0),
+            wins = MAX(wins - 1, 0),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE name = ?
+        """,
+        (row["winner_elo_before"], row["winner_name"])
+    )
+    conn.execute(
+        """
+        UPDATE players
+        SET elo = ?,
+            games_played = MAX(games_played - 1, 0),
+            losses = MAX(losses - 1, 0),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE name = ?
+        """,
+        (row["loser_elo_before"], row["loser_name"])
+    )
+    conn.execute(
+        """
+        UPDATE game_history
+        SET undone_at = CURRENT_TIMESTAMP
+        WHERE match_result_id = ?
+        """,
+        (row["id"],)
+    )
+    conn.execute("DELETE FROM match_results WHERE id = ?", (row["id"],))
+
+
+def undo_match_results_for_match_ids(match_ids):
+    clean_match_ids = [
+        str(match_id or "").strip()
+        for match_id in match_ids
+        if str(match_id or "").strip()
+    ]
+
+    if not clean_match_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in clean_match_ids)
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM match_results
+            WHERE match_id IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            clean_match_ids
+        ).fetchall()
+
+        for row in rows:
+            undo_match_result_row(conn, row)
+
+        conn.commit()
+
+    return len(rows)
+
+
 def slot_parts_from_global_index(index):
     side = "L" if index < 32 else "R"
     slot_index = index if index < 32 else index - 32
@@ -657,6 +1951,1018 @@ def remove_first_round_player_from_state(state, slot_id):
     return True, existing_name
 
 
+def normalize_active_matches(state):
+    state["active_matches"] = [
+        str(match_id)
+        for match_id in state.get("active_matches", [])
+        if str(match_id).strip()
+    ]
+
+
+def normalize_active_tables(state):
+    normalize_active_matches(state)
+    active_match_ids = set(state["active_matches"])
+    clean_tables = {}
+    used_tables = set()
+
+    for match_id, table_number in state.get("active_tables", {}).items():
+        match_id = str(match_id or "").strip()
+
+        try:
+            table_number = int(table_number)
+        except (TypeError, ValueError):
+            continue
+
+        if (
+            match_id in active_match_ids
+            and 1 <= table_number <= TABLE_COUNT
+            and table_number not in used_tables
+        ):
+            clean_tables[match_id] = table_number
+            used_tables.add(table_number)
+
+    state["active_tables"] = clean_tables
+
+    for match_id in state["active_matches"]:
+        if match_id in state["active_tables"]:
+            continue
+
+        for table_number in range(1, TABLE_COUNT + 1):
+            if table_number not in used_tables:
+                state["active_tables"][match_id] = table_number
+                used_tables.add(table_number)
+                break
+
+
+def next_available_table(state):
+    normalize_active_tables(state)
+    used_tables = set(state["active_tables"].values())
+
+    for table_number in range(1, TABLE_COUNT + 1):
+        if table_number not in used_tables:
+            return table_number
+
+    return None
+
+
+def available_tables(state):
+    normalize_active_tables(state)
+    used_tables = set(state["active_tables"].values())
+    return [
+        table_number
+        for table_number in range(1, TABLE_COUNT + 1)
+        if table_number not in used_tables
+    ]
+
+
+def match_id_for_side_round(side, round_index, top_slot_index):
+    return f"{side}-{round_index}-{top_slot_index}"
+
+
+def parse_side_match_id(match_id):
+    parts = str(match_id or "").split("-")
+
+    if len(parts) != 3:
+        return None
+
+    side, round_text, top_slot_text = parts
+
+    if side not in {"L", "R"}:
+        return None
+
+    try:
+        round_index = int(round_text)
+        top_slot_index = int(top_slot_text)
+    except ValueError:
+        return None
+
+    if not 0 <= round_index <= 4:
+        return None
+
+    if top_slot_index % 2 != 0 or not 0 <= top_slot_index < SIDE_ROUNDS[round_index]:
+        return None
+
+    return side, round_index, top_slot_index
+
+
+def is_final_match_id(match_id):
+    return str(match_id or "") == "F-0-0"
+
+
+def match_slot_ids(match_id):
+    if is_final_match_id(match_id):
+        return ["L-5-0", "R-5-0"]
+
+    parsed = parse_side_match_id(match_id)
+    if not parsed:
+        return []
+
+    side, round_index, top_slot_index = parsed
+    return [
+        f"{side}-{round_index}-{top_slot_index}",
+        f"{side}-{round_index}-{top_slot_index + 1}",
+    ]
+
+
+def match_target_slot_id(match_id):
+    if is_final_match_id(match_id):
+        return "champion"
+
+    parsed = parse_side_match_id(match_id)
+    if not parsed:
+        return None
+
+    side, round_index, top_slot_index = parsed
+    return f"{side}-{round_index + 1}-{top_slot_index // 2}"
+
+
+def match_id_for_slot(slot_id):
+    parts = str(slot_id or "").split("-")
+
+    if len(parts) != 3:
+        return None
+
+    side, round_text, slot_text = parts
+
+    if side not in {"L", "R"}:
+        return None
+
+    try:
+        round_index = int(round_text)
+        slot_index = int(slot_text)
+    except ValueError:
+        return None
+
+    if round_index == 5:
+        return "F-0-0"
+
+    if not 0 <= round_index <= 4:
+        return None
+
+    top_slot_index = slot_index if slot_index % 2 == 0 else slot_index - 1
+    return match_id_for_side_round(side, round_index, top_slot_index)
+
+
+def slot_name(state, slot_id):
+    parts = str(slot_id or "").split("-")
+
+    if len(parts) != 3:
+        return ""
+
+    side, round_text, slot_text = parts
+
+    try:
+        round_index = int(round_text)
+        slot_index = int(slot_text)
+    except ValueError:
+        return ""
+
+    state = normalize_state(state)
+
+    if round_index == 0:
+        first_round = state["left"] if side == "L" else state["right"]
+        fallback = first_round[slot_index] if 0 <= slot_index < len(first_round) else ""
+        return state.get("advancements", {}).get(slot_id, fallback) or ""
+
+    return state.get("advancements", {}).get(slot_id, "") or ""
+
+
+def all_match_ids():
+    match_ids = []
+
+    for round_index in range(5):
+        for side in ("L", "R"):
+            for top_slot_index in range(0, SIDE_ROUNDS[round_index], 2):
+                match_ids.append(match_id_for_side_round(side, round_index, top_slot_index))
+
+    match_ids.append("F-0-0")
+    return match_ids
+
+
+def slot_ids_for_round(round_index):
+    if not 0 <= round_index <= 5:
+        return []
+
+    return [
+        f"{side}-{round_index}-{slot_index}"
+        for side in ("L", "R")
+        for slot_index in range(SIDE_ROUNDS[round_index])
+    ]
+
+
+def round_participants(state, round_index):
+    participants = []
+
+    for slot_id in slot_ids_for_round(round_index):
+        name = slot_name(state, slot_id)
+
+        if str(name or "").strip():
+            participants.append({
+                "slot_id": slot_id,
+                "name": name,
+            })
+
+    return participants
+
+
+def downstream_match_ids(match_id):
+    match_ids = []
+    current_match_id = match_id
+
+    while current_match_id:
+        match_ids.append(current_match_id)
+        target_slot_id = match_target_slot_id(current_match_id)
+
+        if target_slot_id in {None, "champion"}:
+            break
+
+        current_match_id = match_id_for_slot(target_slot_id)
+
+        if current_match_id in match_ids:
+            break
+
+    return match_ids
+
+
+def is_round_robin_match_id(match_id):
+    return str(match_id or "").startswith("RR|")
+
+
+def round_robin_match_id(round_index, first_slot_id, second_slot_id):
+    return f"RR|{round_index}|{first_slot_id}|{second_slot_id}"
+
+
+def parse_round_robin_match_id(match_id):
+    parts = str(match_id or "").split("|")
+
+    if len(parts) != 4 or parts[0] != "RR":
+        return None
+
+    try:
+        round_index = int(parts[1])
+    except ValueError:
+        return None
+
+    if not 0 <= round_index <= 5:
+        return None
+
+    first_slot_id = parts[2]
+    second_slot_id = parts[3]
+
+    if first_slot_id not in slot_ids_for_round(round_index):
+        return None
+
+    if second_slot_id not in slot_ids_for_round(round_index):
+        return None
+
+    if first_slot_id == second_slot_id:
+        return None
+
+    return round_index, first_slot_id, second_slot_id
+
+
+def game_from_match_id(state, match_id):
+    state = normalize_state(state)
+    slot_ids = match_slot_ids(match_id)
+
+    if len(slot_ids) != 2:
+        return None
+
+    player_names = [slot_name(state, slot_id) for slot_id in slot_ids]
+    target_slot_id = match_target_slot_id(match_id)
+    winner_name = state.get("champion", "") if target_slot_id == "champion" else slot_name(state, target_slot_id)
+    parsed = parse_side_match_id(match_id)
+    round_key = "final" if is_final_match_id(match_id) else parsed[1]
+
+    return {
+        "id": match_id,
+        "round_key": round_key,
+        "round_label": GAME_ROUND_LABELS[round_key],
+        "slot_ids": slot_ids,
+        "players": [
+            {"slot_id": slot_ids[0], "name": player_names[0]},
+            {"slot_id": slot_ids[1], "name": player_names[1]},
+        ],
+        "winner_name": winner_name,
+        "played": bool(str(winner_name or "").strip()),
+        "active": match_id in state.get("active_matches", []),
+        "table_number": state.get("active_tables", {}).get(match_id),
+        "ready": all(str(name or "").strip() for name in player_names),
+        "has_players": any(str(name or "").strip() for name in player_names),
+    }
+
+
+def normal_games_for_state(state):
+    return [
+        game
+        for game in (game_from_match_id(state, match_id) for match_id in all_match_ids())
+        if game and game["has_players"]
+    ]
+
+
+def prior_rounds_are_complete(state, round_index):
+    for game in normal_games_for_state(state):
+        round_key = game["round_key"]
+
+        if isinstance(round_key, int) and round_key < round_index and not game["played"]:
+            return False
+
+    return True
+
+
+def detected_round_robin_final(state):
+    state = normalize_state(state)
+
+    for round_index in range(1, 5):
+        participants = round_participants(state, round_index)
+
+        if len(participants) == 3 and prior_rounds_are_complete(state, round_index):
+            return {
+                "round_index": round_index,
+                "participants": participants,
+            }
+
+    return None
+
+
+def round_robin_label(round_index):
+    return f"Round Robin Final ({GAME_ROUND_NUMBER_LABELS[round_index]})"
+
+
+def round_robin_group_key(round_index):
+    return f"rr-{round_index}"
+
+
+def round_robin_pairings(participants):
+    return [
+        (participants[0], participants[1]),
+        (participants[0], participants[2]),
+        (participants[1], participants[2]),
+    ]
+
+
+def round_robin_match_ids_for_detection(detection):
+    return [
+        round_robin_match_id(
+            detection["round_index"],
+            first["slot_id"],
+            second["slot_id"],
+        )
+        for first, second in round_robin_pairings(detection["participants"])
+    ]
+
+
+def round_robin_score_key(detection):
+    participants = [
+        [participant["slot_id"], participant["name"]]
+        for participant in detection["participants"]
+    ]
+
+    return json_dumps_compact({
+        "round": detection["round_index"],
+        "participants": participants,
+    })
+
+
+def clean_round_robin_score(value):
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        score = 0
+
+    return max(0, min(score, 2))
+
+
+def round_robin_scores_from_results(detection, results):
+    scores = {
+        participant["slot_id"]: 0
+        for participant in detection["participants"]
+    }
+    name_by_slot = {
+        participant["slot_id"]: participant["name"]
+        for participant in detection["participants"]
+    }
+
+    for result in results.values():
+        parsed = parse_round_robin_match_id(result["match_id"])
+
+        if not parsed:
+            continue
+
+        _, first_slot_id, second_slot_id = parsed
+
+        for slot_id in (first_slot_id, second_slot_id):
+            if name_by_slot.get(slot_id) == result["winner_name"]:
+                scores[slot_id] += 1
+
+    return {
+        slot_id: clean_round_robin_score(score)
+        for slot_id, score in scores.items()
+    }
+
+
+def round_robin_scores_for_detection(state, detection, results=None):
+    state = normalize_state(state)
+    key = round_robin_score_key(detection)
+    stored_scores = state.get("round_robin_scores", {}).get(key)
+    slot_ids = [
+        participant["slot_id"]
+        for participant in detection["participants"]
+    ]
+
+    if isinstance(stored_scores, dict):
+        return {
+            slot_id: clean_round_robin_score(stored_scores.get(slot_id, 0))
+            for slot_id in slot_ids
+        }
+
+    if results is None:
+        results = match_results_by_match_id(
+            round_robin_match_ids_for_detection(detection)
+        )
+
+    return round_robin_scores_from_results(detection, results)
+
+
+def set_round_robin_scores_for_detection(state, detection, scores):
+    state.setdefault("round_robin_scores", {})
+    key = round_robin_score_key(detection)
+    state["round_robin_scores"][key] = {
+        participant["slot_id"]: clean_round_robin_score(
+            scores.get(participant["slot_id"], 0)
+        )
+        for participant in detection["participants"]
+    }
+
+
+def adjust_round_robin_score(state, detection, slot_id, delta):
+    slot_id = str(slot_id or "")
+    participant_slot_ids = {
+        participant["slot_id"]
+        for participant in detection["participants"]
+    }
+
+    if slot_id not in participant_slot_ids:
+        return False
+
+    scores = round_robin_scores_for_detection(state, detection)
+    scores[slot_id] = clean_round_robin_score(scores.get(slot_id, 0) + delta)
+    set_round_robin_scores_for_detection(state, detection, scores)
+    return True
+
+
+def clear_round_robin_scores_for_detection(state, detection):
+    state.setdefault("round_robin_scores", {})
+    state["round_robin_scores"].pop(round_robin_score_key(detection), None)
+
+
+def round_robin_game_from_match_id(state, match_id, result=None):
+    parsed = parse_round_robin_match_id(match_id)
+
+    if not parsed:
+        return None
+
+    round_index, first_slot_id, second_slot_id = parsed
+    first_name = slot_name(state, first_slot_id)
+    second_name = slot_name(state, second_slot_id)
+
+    if not first_name or not second_name:
+        return None
+
+    result = result or match_results_by_match_id([match_id]).get(match_id)
+    winner_name = result["winner_name"] if result else ""
+
+    return {
+        "id": match_id,
+        "display_id": "Round Robin",
+        "round_key": round_robin_group_key(round_index),
+        "round_label": round_robin_label(round_index),
+        "is_round_robin": True,
+        "slot_ids": [first_slot_id, second_slot_id],
+        "players": [
+            {"slot_id": first_slot_id, "name": first_name},
+            {"slot_id": second_slot_id, "name": second_name},
+        ],
+        "winner_name": winner_name,
+        "played": bool(winner_name),
+        "active": match_id in state.get("active_matches", []),
+        "table_number": state.get("active_tables", {}).get(match_id),
+        "ready": True,
+        "has_players": True,
+    }
+
+
+def round_robin_games_for_detection(state, detection):
+    pairings = round_robin_pairings(detection["participants"])
+    match_ids = round_robin_match_ids_for_detection(detection)
+    results = match_results_by_match_id(match_ids)
+    games = []
+
+    for index, (first, second) in enumerate(pairings, start=1):
+        match_id = round_robin_match_id(
+            detection["round_index"],
+            first["slot_id"],
+            second["slot_id"],
+        )
+        game = round_robin_game_from_match_id(
+            state,
+            match_id,
+            results.get(match_id)
+        )
+
+        if game:
+            game["display_id"] = f"Round Robin Game {index}"
+            games.append(game)
+
+    return games
+
+
+def round_robin_scoreboard_for_state(state, detection=None):
+    detection = detection or detected_round_robin_final(state)
+
+    if not detection:
+        return {
+            "active": False,
+            "title": "Round Robin Final",
+            "players": [],
+            "played": 0,
+            "total": 0,
+        }
+
+    match_ids = round_robin_match_ids_for_detection(detection)
+    results = match_results_by_match_id(match_ids)
+    score_values = round_robin_scores_for_detection(state, detection, results)
+    players = {
+        participant["slot_id"]: {
+            "slot_id": participant["slot_id"],
+            "name": participant["name"],
+            "wins": 0,
+            "losses": 0,
+            "played": 0,
+            "place": "",
+            "rank_score": score_values.get(participant["slot_id"], 0),
+        }
+        for participant in detection["participants"]
+    }
+
+    for result in results.values():
+        winner_name = result["winner_name"]
+        loser_name = result["loser_name"]
+        parsed = parse_round_robin_match_id(result["match_id"])
+        match_slot_ids = parsed[1:] if parsed else ()
+        winner_slot_id = next(
+            (
+                slot_id for slot_id in match_slot_ids
+                if players.get(slot_id, {}).get("name") == winner_name
+            ),
+            None
+        )
+        loser_slot_id = next(
+            (
+                slot_id for slot_id in match_slot_ids
+                if players.get(slot_id, {}).get("name") == loser_name
+            ),
+            None
+        )
+
+        if winner_slot_id in players:
+            players[winner_slot_id]["wins"] += 1
+            players[winner_slot_id]["played"] += 1
+
+        if loser_slot_id in players:
+            players[loser_slot_id]["losses"] += 1
+            players[loser_slot_id]["played"] += 1
+
+    score_rows = []
+
+    score_rows.extend(players.values())
+
+    score_rows.sort(
+        key=lambda player: (
+            -player["rank_score"],
+            player["name"].casefold()
+        )
+    )
+
+    place_labels = {
+        1: "1st",
+        2: "2nd",
+        3: "3rd",
+    }
+    has_scores = any(player["rank_score"] for player in score_rows)
+    last_score = None
+    current_place = 0
+
+    for index, player in enumerate(score_rows):
+        if has_scores and player["rank_score"] != last_score:
+            current_place = index + 1
+            last_score = player["rank_score"]
+
+        player["place"] = place_labels.get(current_place, "") if has_scores else ""
+        player["score"] = f"{player['rank_score']}W"
+
+    total_score = sum(player["rank_score"] for player in score_rows)
+    three_way_tie = (
+        len(score_rows) == 3
+        and total_score == 3
+        and len({player["rank_score"] for player in score_rows}) == 1
+    )
+
+    return {
+        "active": True,
+        "title": round_robin_label(detection["round_index"]),
+        "players": score_rows,
+        "played": len(results),
+        "total": len(match_ids),
+        "score_total": total_score,
+        "is_complete": total_score == 3,
+        "three_way_tie": three_way_tie,
+    }
+
+
+def all_game_groups_for_state(state):
+    normalize_active_tables(state)
+    groups = []
+    round_robin = detected_round_robin_final(state)
+    round_robin_index = round_robin["round_index"] if round_robin else None
+
+    for round_key in ROUND_ORDER:
+        if round_key == round_robin_index:
+            groups.append({
+                "key": round_robin_group_key(round_robin_index),
+                "label": round_robin_label(round_robin_index),
+                "short_label": ROUND_ROBIN_FINAL_SHORT_LABEL,
+                "scoreboard": round_robin_scoreboard_for_state(state, round_robin),
+                "games": round_robin_games_for_detection(state, round_robin),
+            })
+            continue
+
+        games = [
+            game
+            for game in normal_games_for_state(state)
+            if game["round_key"] == round_key
+        ]
+
+        if games:
+            groups.append({
+                "key": str(round_key),
+                "label": GAME_ROUND_LABELS[round_key],
+                "short_label": GAME_ROUND_SHORT_LABELS[round_key],
+                "games": games,
+            })
+
+    return groups
+
+
+def apply_game_filter(games, game_filter):
+    if game_filter == "played":
+        return [game for game in games if game["played"]]
+
+    if game_filter == "unplayed":
+        return [game for game in games if not game["played"]]
+
+    return games
+
+
+def grouped_games_for_state(state, game_filter="all"):
+    groups = []
+
+    for group in all_game_groups_for_state(state):
+        games = apply_game_filter(group["games"], game_filter)
+
+        if games:
+            groups.append({
+                **group,
+                "games": games,
+            })
+
+    return groups
+
+
+def games_for_state(state):
+    return [
+        game
+        for group in all_game_groups_for_state(state)
+        for game in group["games"]
+    ]
+
+
+def game_for_match_id(state, match_id):
+    if is_round_robin_match_id(match_id):
+        return round_robin_game_from_match_id(state, match_id)
+
+    return game_from_match_id(state, match_id)
+
+
+def round_jump_links_for_groups(groups):
+    links = []
+
+    for group in groups:
+        games = [
+            game
+            for game in group["games"]
+            if not game["played"]
+        ]
+
+        if not games:
+            continue
+
+        links.append({
+            "key": group["key"],
+            "label": group["label"],
+            "short_label": group["short_label"],
+            "count": len(games),
+        })
+
+    return links
+
+
+def update_round_robin_score_in_state(state, slot_id, delta):
+    state = normalize_state(state)
+    detection = detected_round_robin_final(state)
+
+    if not detection:
+        return False, "Round robin final was not found"
+
+    try:
+        delta = int(delta)
+    except (TypeError, ValueError):
+        return False, "Score change was not valid"
+
+    if not adjust_round_robin_score(state, detection, slot_id, delta):
+        return False, "Finalist was not found"
+
+    return True, state
+
+
+def reset_round_robin_final_in_state(state):
+    state = normalize_state(state)
+    detection = detected_round_robin_final(state)
+
+    if not detection:
+        return False, "Round robin final was not found"
+
+    match_ids = round_robin_match_ids_for_detection(detection)
+    undo_match_results_for_match_ids(match_ids)
+    clear_round_robin_scores_for_detection(state, detection)
+    normalize_active_tables(state)
+    state["active_matches"] = [
+        match_id
+        for match_id in state["active_matches"]
+        if match_id not in match_ids
+    ]
+
+    for match_id in match_ids:
+        state["active_tables"].pop(match_id, None)
+
+    return True, state
+
+
+def start_game_in_state(state, match_id, table_number=None):
+    state = normalize_state(state)
+    game = game_for_match_id(state, match_id)
+
+    if not game:
+        return False, "Game was not found"
+
+    if game["played"]:
+        return False, "That game has already been played"
+
+    if not game["ready"]:
+        return False, "Both players must be known before a game can start"
+
+    normalize_active_tables(state)
+
+    if match_id not in state["active_matches"]:
+        open_tables = available_tables(state)
+
+        if len(open_tables) > 1:
+            try:
+                table_number = int(table_number)
+            except (TypeError, ValueError):
+                return False, "Choose a table before starting this game"
+
+            if table_number not in open_tables:
+                return False, "That table is already in use"
+        else:
+            table_number = open_tables[0] if open_tables else None
+
+        if table_number is None:
+            return False, f"All {TABLE_COUNT} tables are already in use"
+
+        state["active_matches"].append(match_id)
+        state["active_tables"][match_id] = table_number
+    elif match_id not in state["active_tables"]:
+        open_tables = available_tables(state)
+        table_number = open_tables[0] if open_tables else None
+
+        if table_number is None:
+            return False, f"All {TABLE_COUNT} tables are already in use"
+
+        state["active_tables"][match_id] = table_number
+
+    return True, state
+
+
+def win_game_in_state(state, match_id, winner_slot_id):
+    state = normalize_state(state)
+    game = game_for_match_id(state, match_id)
+
+    if not game:
+        return False, "Game was not found"
+
+    if game["played"]:
+        return False, "Reset this game before recording a different winner"
+
+    if not game["ready"]:
+        return False, "Both players must be known before a winner can be recorded"
+
+    player_by_slot = {
+        player["slot_id"]: player["name"]
+        for player in game["players"]
+    }
+
+    winner_name = player_by_slot.get(winner_slot_id, "")
+
+    if not winner_name:
+        return False, "Winner was not found"
+
+    loser_name = next(
+        (name for slot_id, name in player_by_slot.items() if slot_id != winner_slot_id),
+        ""
+    )
+
+    success, result = record_match_result(match_id, winner_name, loser_name)
+
+    if not success:
+        return False, result
+
+    if is_round_robin_match_id(match_id):
+        detection = detected_round_robin_final(state)
+
+        if detection:
+            adjust_round_robin_score(state, detection, winner_slot_id, 1)
+
+    target_slot_id = match_target_slot_id(match_id)
+
+    if target_slot_id == "champion":
+        state["champion"] = winner_name
+    elif target_slot_id:
+        state.setdefault("advancements", {})
+        state["advancements"][target_slot_id] = winner_name
+
+    normalize_active_tables(state)
+    state["active_matches"] = [
+        active_match_id
+        for active_match_id in state["active_matches"]
+        if active_match_id != match_id
+    ]
+    state["active_tables"].pop(match_id, None)
+
+    return True, state
+
+
+def reset_game_in_state(state, match_id):
+    state = normalize_state(state)
+    game = game_for_match_id(state, match_id)
+
+    if not game:
+        normalize_active_tables(state)
+        if match_id in state["active_matches"] or match_id in state["active_tables"]:
+            state["active_matches"] = [
+                active_match_id
+                for active_match_id in state["active_matches"]
+                if active_match_id != match_id
+            ]
+            state["active_tables"].pop(match_id, None)
+            return True, state
+
+        return False, "Game was not found"
+
+    if is_round_robin_match_id(match_id):
+        detection = detected_round_robin_final(state)
+        winner_slot_id = next(
+            (
+                player["slot_id"]
+                for player in game["players"]
+                if player["name"] and player["name"] == game.get("winner_name")
+            ),
+            ""
+        )
+
+        if detection and winner_slot_id:
+            adjust_round_robin_score(state, detection, winner_slot_id, -1)
+
+        undo_match_results_for_match_ids([match_id])
+        normalize_active_tables(state)
+        state["active_matches"] = [
+            active_match_id
+            for active_match_id in state["active_matches"]
+            if active_match_id != match_id
+        ]
+        state["active_tables"].pop(match_id, None)
+        return True, state
+
+    impacted_match_ids = downstream_match_ids(match_id)
+    round_robin = detected_round_robin_final(state)
+    parsed_match = parse_side_match_id(match_id)
+
+    if round_robin and parsed_match:
+        side, round_index, top_slot_index = parsed_match
+
+        if round_index <= round_robin["round_index"]:
+            impacted_match_ids.extend(round_robin_match_ids_for_detection(round_robin))
+            clear_round_robin_scores_for_detection(state, round_robin)
+
+    undo_match_results_for_match_ids(impacted_match_ids)
+
+    state.setdefault("advancements", {})
+    normalize_active_tables(state)
+    state["active_matches"] = [
+        active_match_id
+        for active_match_id in state["active_matches"]
+        if active_match_id not in impacted_match_ids
+    ]
+    for impacted_match_id in impacted_match_ids:
+        state["active_tables"].pop(impacted_match_id, None)
+
+    for impacted_match_id in impacted_match_ids:
+        target_slot_id = match_target_slot_id(impacted_match_id)
+
+        if target_slot_id == "champion":
+            state["champion"] = ""
+        elif target_slot_id:
+            state["advancements"][target_slot_id] = ""
+
+    return True, state
+
+
+def delete_first_round_game_in_state(state, match_id):
+    state = normalize_state(state)
+    parsed = parse_side_match_id(match_id)
+
+    if not parsed:
+        return False, "Game was not found"
+
+    side, round_index, top_slot_index = parsed
+
+    if round_index != 0:
+        return False, "Only first-round games can be deleted"
+
+    reset_success, reset_result = reset_game_in_state(state, match_id)
+
+    if not reset_success:
+        return False, reset_result
+
+    state = reset_result
+    removed_any = False
+
+    for slot_id in match_slot_ids(match_id):
+        if slot_name(state, slot_id):
+            success, result = remove_first_round_player_from_state(state, slot_id)
+
+            if not success:
+                return False, result
+
+            removed_any = True
+
+    if not removed_any:
+        return False, "That first-round game is already empty"
+
+    return True, state
+
+
+def delete_first_round_player_in_state(state, match_id, slot_id):
+    state = normalize_state(state)
+    parsed = parse_side_match_id(match_id)
+
+    if not parsed:
+        return False, "Game was not found"
+
+    side, round_index, top_slot_index = parsed
+
+    if round_index != 0:
+        return False, "Only first-round players can be deleted"
+
+    if slot_id not in match_slot_ids(match_id):
+        return False, "That player does not belong to this game"
+
+    reset_success, reset_result = reset_game_in_state(state, match_id)
+
+    if not reset_success:
+        return False, reset_result
+
+    remove_success, remove_result = remove_first_round_player_from_state(
+        reset_result,
+        slot_id
+    )
+
+    if not remove_success:
+        return False, remove_result
+
+    return True, reset_result
+
+
 @app.route("/")
 def bracket():
     state = load_state()
@@ -667,13 +2973,220 @@ def bracket():
     else:
         state = normalize_state(state)
 
+    state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
+
     return render_template("bracket.html", bracket_data=state)
+
+
+@app.route("/bracket_state")
+def bracket_state_route():
+    state = normalize_state(load_state() or empty_state())
+    state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
+    return state
+
+
+@app.route("/executive_games")
+def executive_games():
+    state = normalize_state(load_state() or empty_state())
+    game_filter = request.args.get("filter", "all")
+
+    if game_filter not in {"all", "unplayed", "played"}:
+        game_filter = "all"
+
+    groups = grouped_games_for_state(state, game_filter)
+    games = [game for group in groups for game in group["games"]]
+    all_games = games_for_state(state)
+    open_tables = available_tables(state)
+
+    return render_template(
+        "executive_games.html",
+        groups=groups,
+        round_jump_links=round_jump_links_for_groups(groups),
+        game_filter=game_filter,
+        available_tables=open_tables,
+        needs_table_choice=len(open_tables) > 1,
+        counts={
+            "all": len(all_games),
+            "unplayed": sum(1 for game in all_games if not game["played"]),
+            "played": sum(1 for game in all_games if game["played"]),
+            "visible": len(games),
+        },
+        bracket_version=state.get("_version", 0),
+    )
+
+
+@app.route("/game_action", methods=["POST"])
+def game_action_route():
+    action = request.form.get("action", "")
+    match_id = request.form.get("match_id", "")
+    game_filter = request.form.get("filter", "all")
+    state = normalize_state(load_state() or empty_state())
+
+    if action == "start":
+        success, result = start_game_in_state(
+            state,
+            match_id,
+            request.form.get("table_number")
+        )
+    elif action == "win":
+        success, result = win_game_in_state(
+            state,
+            match_id,
+            request.form.get("winner_slot_id", "")
+        )
+    elif action == "reset":
+        success, result = reset_game_in_state(state, match_id)
+    elif action == "round_robin_score":
+        success, result = update_round_robin_score_in_state(
+            state,
+            request.form.get("slot_id", ""),
+            request.form.get("score_delta", "0")
+        )
+    elif action == "reset_round_robin_final":
+        success, result = reset_round_robin_final_in_state(state)
+    elif action == "delete_first_round_player":
+        success, result = delete_first_round_player_in_state(
+            state,
+            match_id,
+            request.form.get("slot_id", "")
+        )
+    elif action == "delete_first_round":
+        success, result = delete_first_round_game_in_state(state, match_id)
+    else:
+        success, result = False, "Unknown game action"
+
+    if success:
+        save_state(result)
+
+    return redirect(url_for("executive_games", filter=game_filter))
+
+
+@app.route("/registration_state", methods=["GET", "POST"])
+def registration_state_route():
+    if request.method == "POST":
+        incoming = request.get_json(silent=True) or {}
+        registration_client_id = clean_registration_client_id(
+            incoming.get("client_id", "")
+        )
+        updates = {
+            field: incoming.get(field, "")
+            for field in REGISTRATION_FIELDS
+            if field in incoming
+        }
+
+        with closing(get_db()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current_state = load_registration_state_with_conn(conn)
+
+            if is_stale_registration_state(
+                incoming.get("known_version"),
+                registration_client_id,
+                current_state
+            ):
+                conn.rollback()
+                return {**current_state, "refresh": True}, 409
+
+            if updates:
+                current_state = save_registration_state_with_conn(
+                    conn,
+                    updates,
+                    registration_client_id
+                )
+
+            conn.commit()
+
+            return current_state
+
+    return load_registration_state()
+
+
+@app.route("/payments", methods=["GET", "POST"])
+def payments():
+    if request.method == "POST":
+        active_players = active_comp_players()
+        state = normalize_state(load_state() or empty_state())
+        paid_keys = set(request.form.getlist("paid_player"))
+        payments = {
+            player["key"]: player["key"] in paid_keys
+            for player in active_players
+        }
+        payout_mode = clean_payout_mode(request.form.get("payout_mode"))
+        comp_size = clean_comp_size(
+            request.form.get("comp_size"),
+            default_comp_size_for_players(active_players)
+        )
+
+        if payout_mode == "preset":
+            prizes = dict(PRESET_WINNINGS[comp_size])
+        else:
+            prizes = {
+                1: request.form.get("first_winnings", "0"),
+                2: request.form.get("second_winnings", "0"),
+                3: request.form.get("third_winnings", "0"),
+            }
+
+        winners = {
+            str(place): request.form.get(f"winner_{place}", "")
+            for place in PAYOUT_PLACES
+        }
+        automatic_winners, _ = automatic_winners_from_round_robin(state)
+
+        if automatic_winners:
+            winners = automatic_winners
+
+        save_finance_state(
+            0,
+            payments,
+            payout_mode,
+            comp_size,
+            prizes,
+            winners
+        )
+        summary = finance_summary()
+        save_comp_results_and_snapshot(summary)
+
+        if request.headers.get("X-Requested-With") == "fetch":
+            return summary
+
+        return redirect(url_for("payments"))
+
+    return render_template(
+        "payments.html",
+        summary=finance_summary()
+    )
+
+
+@app.route("/payments/export.pdf")
+def payments_pdf():
+    summary = finance_summary()
+    save_comp_results_and_snapshot(summary)
+    history = payment_report_history()
+    pdf_bytes = build_payment_report_pdf(summary, history, today_key())
+
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=pool-payments-report.pdf"
+        }
+    )
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
         action = request.form.get("action")
+        registration_client_id = clean_registration_client_id(
+            request.form.get("registration_client_id", "")
+        )
+        registration_updates = registration_form_updates(request.form)
+
+        if not claim_registration_state(
+            request.form.get("registration_version"),
+            registration_client_id,
+            registration_updates
+        ):
+            return redirect(url_for("register"))
 
         new_players = parse_textarea(
             request.form.get("new_players", "")
@@ -689,11 +3202,15 @@ def register():
 
         if action == "end_comp":
             save_state(empty_state())
+            save_registration_state(
+                {field: "" for field in REGISTRATION_FIELDS},
+                registration_client_id
+            )
             return redirect(url_for("register"))
 
         if action == "generate":
             player_entries = [
-                (name, shorten_name(name))
+                (name, bracket_name(name))
                 for name in new_players
             ]
 
@@ -716,17 +3233,21 @@ def register():
                 }
             }
 
-            add_known_players(raw_name for raw_name, _ in player_entries)
+            add_known_players(known_player_names_from_entries(raw_name for raw_name, _ in player_entries))
             ensure_players_exist(players)
             save_state(state)
+            save_registration_state(
+                {field: "" for field in REGISTRATION_FIELDS},
+                registration_client_id
+            )
 
-            return redirect(url_for("bracket"))
+            return redirect(url_for("register"))
 
         if action == "add_late":
             state = normalize_state(load_state() or empty_state())
 
             player_entries = [
-                (name, shorten_name(name))
+                (name, bracket_name(name))
                 for name in late_players
             ]
 
@@ -743,17 +3264,19 @@ def register():
             state = add_players_to_empty_slots(state, players_to_add)
             state["counts"]["late_players"] += added_count
 
-            add_known_players(raw_name for raw_name, _ in added_entries)
+            add_known_players(known_player_names_from_entries(raw_name for raw_name, _ in added_entries))
             ensure_players_exist(players_to_add)
             save_state(state)
+            registration_updates["late_players"] = ""
+            save_registration_state(registration_updates, registration_client_id)
 
-            return redirect(url_for("bracket"))
+            return redirect(url_for("register"))
 
         if action == "add_buybacks":
             state = normalize_state(load_state() or empty_state())
 
             player_entries = [
-                (name, shorten_name(name, buyback=True))
+                (name, bracket_name(name, buyback=True))
                 for name in buybacks
             ]
 
@@ -770,20 +3293,27 @@ def register():
             state = add_players_to_empty_slots(state, players_to_add)
             state["counts"]["buybacks"] += added_count
 
-            add_known_players(raw_name for raw_name, _ in added_entries)
+            add_known_players(known_player_names_from_entries(raw_name for raw_name, _ in added_entries))
             ensure_players_exist(players_to_add)
             save_state(state)
+            registration_updates["buybacks"] = ""
+            save_registration_state(registration_updates, registration_client_id)
 
-            return redirect(url_for("bracket"))
+            return redirect(url_for("register"))
 
     counts = get_register_counts()
+    registration_state = load_registration_state()
+    target_field = "late_players" if counts["total_players"] > 0 else "new_players"
 
     return render_template(
         "register.html",
         members=load_members(),
         known_players=get_known_players(),
         counts=counts,
-        initial_signups=[],
+        initial_signups=player_names_from_entries(
+            parse_textarea(registration_state.get(target_field, ""))
+        ),
+        registration_state=registration_state,
         rankings=get_rankings(),
         has_initial_comp=counts["total_players"] > 0
     )
@@ -793,13 +3323,23 @@ def register():
 def edit_members():
     if request.method == "POST":
         edited_members = parse_textarea(request.form.get("members", ""))
+        edited_known_non_members = parse_textarea(
+            request.form.get("known_non_members", "")
+        )
         save_members(edited_members)
+        save_known_player_names(edited_members + edited_known_non_members)
+        touch_registration_state()
         return redirect(url_for("register"))
+
+    members = load_members()
+    known_non_members = load_known_non_member_names()
 
     return render_template(
         "members.html",
-        members_text="\n".join(load_members()),
-        member_count=len(load_members())
+        members_text="\n".join(members),
+        member_count=len(members),
+        known_non_members_text="\n".join(known_non_members),
+        known_non_member_count=len(known_non_members)
     )
 
 
@@ -815,6 +3355,7 @@ def remove_first_round_player_route():
         return {"success": False, "error": result}, 400
 
     save_state(state)
+    touch_registration_state()
 
     return {
         "success": True,
@@ -923,6 +3464,9 @@ def save_bracket_route():
     # registration metadata so a bracket click cannot wipe counts or vacancies.
     incoming["counts"] = old_state.get("counts", {"late_players": 0, "buybacks": 0})
     incoming["replacement_slots"] = old_state.get("replacement_slots", [])
+    incoming["champion"] = incoming.get("champion", old_state.get("champion", ""))
+    incoming["round_robin_scores"] = old_state.get("round_robin_scores", {})
+    incoming["active_tables"] = old_state.get("active_tables", {})
 
     save_state(incoming)
 

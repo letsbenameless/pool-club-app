@@ -24,6 +24,23 @@
       transform-origin: top left;
     }
 
+    .week-badge {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      z-index: 20;
+      transform: translateX(-50%);
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: rgba(23, 23, 23, 0.92);
+      color: #aaa;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
     svg {
       position: absolute;
       inset: 0;
@@ -52,33 +69,71 @@
       left: 3px;
       bottom: 4px;
       font-size: 9px;
-      white-space: nowrap;
+      white-space: pre;
       color: #f2f2f2;
       text-shadow: 0 1px 2px black;
     }
 
-    .champion {
+    .round-robin-scoreboard {
       position: absolute;
-      width: 130px;
-      height: 22px;
-      text-align: center;
-      font-size: 13px;
-      font-weight: bold;
-      color: white;
-      border-bottom: 1.5px solid #ffffff;
+      box-sizing: border-box;
+      width: 118px;
+      height: 118px;
+      border: 1px solid #d7d7d7;
+      background: #050505;
+      padding: 8px;
       z-index: 2;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
     }
 
-    .final-label {
-      position: absolute;
-      width: 130px;
+    .rr-title {
       text-align: center;
-      font-size: 11px;
+      font-size: 8px;
+      line-height: 1.1;
       color: #aaa;
+      text-transform: uppercase;
+    }
+
+    .rr-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 4px;
+      align-items: baseline;
+      min-width: 0;
+      font-size: 9px;
+      line-height: 1.15;
+      color: #f2f2f2;
+    }
+
+    .rr-place {
+      color: #aaa;
+      font-size: 8px;
+    }
+
+    .rr-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .rr-score {
+      color: #7CFF7C;
+      font-weight: bold;
+    }
+
+    .rr-empty {
+      text-align: center;
+      font-size: 9px;
+      line-height: 1.25;
+      color: #777;
     }
 
     .slot {
-      cursor: pointer;
+      cursor: default;
     }
 
     .name:hover {
@@ -90,6 +145,11 @@
     }
 
     .active-match .name {
+      color: #7CFF7C;
+      font-weight: bold;
+    }
+
+    .round-robin-finalist .name {
       color: #7CFF7C;
       font-weight: bold;
     }
@@ -125,26 +185,27 @@
 
 <body>
 
+<div class="week-badge">{{ competition.display }}</div>
 <a class="back-link" href="{{ url_for('register') }}">Register players</a>
 
 <div class="bracket" id="bracket">
   <svg id="lines"></svg>
 
-  <div class="final-label" id="final-label">GRAND FINAL</div>
-  <div class="champion" id="champion">Champion</div>
+  <div class="round-robin-scoreboard" id="round-robin-scoreboard" aria-label="Round robin scores"></div>
 </div>
 
 <script>
 const activeMatchIds = new Set();
 const MAX_ACTIVE_MATCHES = 3;
 const bracketData = {{ bracket_data | tojson }};
+const bracketStateUrl = {{ url_for("bracket_state_route") | tojson }};
+const bracketVersion = Number(bracketData._version || 0);
 console.log("bracketData:", bracketData);
 
 const bracket = document.getElementById("bracket");
 const svg = document.getElementById("lines");
 const winners = {};
-const champion = document.getElementById("champion");
-const finalLabel = document.getElementById("final-label");
+const roundRobinScoreboard = document.getElementById("round-robin-scoreboard");
 const undoStack = [];
 let saveQueue = Promise.resolve();
 
@@ -157,7 +218,7 @@ const FIT_PADDING = 4;
 function getBracketContentBounds() {
   const bounds = [];
 
-  document.querySelectorAll(".slot, .champion, .final-label").forEach(el => {
+  document.querySelectorAll(".slot, .round-robin-scoreboard").forEach(el => {
     bounds.push({
       left: el.offsetLeft,
       top: el.offsetTop,
@@ -221,21 +282,18 @@ const BASE_GAP = 20;
 
 const BRACKET_CENTER_Y = START_Y + ((32 - 1) / 2) * BASE_GAP + SLOT_H;
 
-champion.style.top = (BRACKET_CENTER_Y - champion.offsetHeight) + "px";
-finalLabel.style.top = (BRACKET_CENTER_Y - 65) + "px";
-
 const leftXs  = [30, 115, 200, 285, 370, 455];
 const rightXs = [1095, 1010, 925, 840, 755, 670];
 
-const FINAL_W = 130;
+const SCOREBOARD_SIZE = 118;
 
 const leftFinalLineEnd = leftXs[5] + SLOT_W;
 const rightFinalLineEnd = rightXs[5];
 
 const FINAL_CENTER_X = (leftFinalLineEnd + rightFinalLineEnd) / 2;
 
-champion.style.left = (FINAL_CENTER_X - FINAL_W / 2) + "px";
-finalLabel.style.left = (FINAL_CENTER_X - FINAL_W / 2) + "px";
+roundRobinScoreboard.style.left = (FINAL_CENTER_X - SCOREBOARD_SIZE / 2) + "px";
+roundRobinScoreboard.style.top = (BRACKET_CENTER_Y - SCOREBOARD_SIZE / 2) + "px";
 
 const rounds = [32, 16, 8, 4, 2, 1];
 
@@ -257,14 +315,6 @@ function createSlot(id, x, y, name) {
   div.innerHTML = `
     <div class="name">${name || ""}</div>
   `;
-
-  div.addEventListener("click", () => {
-    handleSlotClick(id);
-  });
-
-  div.addEventListener("contextmenu", (event) => {
-    handleSlotRightClick(event, id);
-  });
 
   bracket.appendChild(div);
 }
@@ -325,7 +375,8 @@ function buildBracketState() {
     left: firstRound.slice(0, 32),
     right: firstRound.slice(32, 64),
     advancements: {},
-    active_matches: [...activeMatchIds]
+    active_matches: [...activeMatchIds],
+    champion: bracketData.champion || ""
   };
 
   document.querySelectorAll(".slot").forEach(slot => {
@@ -399,6 +450,10 @@ function getMatchTopSlotId(slotId) {
 }
 
 function getMatchSlotIds(slotId) {
+  if (slotId === "F-0-0") {
+    return ["L-5-0", "R-5-0"];
+  }
+
   const topSlotId = getMatchTopSlotId(slotId);
   const [sidePrefix, roundIndex, topSlotIndex] = topSlotId.split("-");
 
@@ -559,11 +614,11 @@ async function advanceWinner(slotId, options = {}) {
   if (roundIndex >= rounds.length - 1) {
     undoStack.push({
       type: "champion",
-      previousChampion: champion.textContent,
+      previousChampion: bracketData.champion || "",
       matchResultId: eloResult?.match_result_id || null
     });
 
-    champion.textContent = winnerName;
+    bracketData.champion = winnerName;
     if (shouldSave) {
       await saveBracketState();
     }
@@ -618,7 +673,7 @@ async function undoLastAction() {
 
   if (lastAction.type === "champion") {
     await undoMatchResult(lastAction.matchResultId);
-    champion.textContent = lastAction.previousChampion;
+    bracketData.champion = lastAction.previousChampion;
   }
 
   if (lastAction.type === "add-player") {
@@ -705,8 +760,8 @@ function drawFinalConnector(fromId, side) {
   const champY = BRACKET_CENTER_Y;
 
   const champX = side === "left"
-    ? champion.offsetLeft
-    : champion.offsetLeft + champion.offsetWidth;
+    ? roundRobinScoreboard.offsetLeft
+    : roundRobinScoreboard.offsetLeft + roundRobinScoreboard.offsetWidth;
 
   const jointX = side === "left"
     ? from.x + 24
@@ -718,6 +773,49 @@ function drawFinalConnector(fromId, side) {
     { x: jointX, y: champY },
     { x: champX, y: champY }
   ]);
+}
+
+function renderRoundRobinScoreboard() {
+  const scoreboard = bracketData.round_robin_scoreboard || {};
+  roundRobinScoreboard.textContent = "";
+  document.querySelectorAll(".round-robin-finalist").forEach(slot => {
+    slot.classList.remove("round-robin-finalist");
+  });
+
+  if (!scoreboard.active || !Array.isArray(scoreboard.players) || !scoreboard.players.length) {
+    return;
+  }
+
+  scoreboard.players.forEach(player => {
+    if (player.slot_id) {
+      document.getElementById(player.slot_id)?.classList.add("round-robin-finalist");
+    }
+  });
+
+  const title = document.createElement("div");
+  title.className = "rr-title";
+  title.textContent = `Round Robin ${scoreboard.played || 0}/${scoreboard.total || 0}`;
+  roundRobinScoreboard.appendChild(title);
+
+  scoreboard.players.forEach(player => {
+    const row = document.createElement("div");
+    row.className = "rr-row";
+
+    const place = document.createElement("span");
+    place.className = "rr-place";
+    place.textContent = player.place || "";
+
+    const name = document.createElement("span");
+    name.className = "rr-name";
+    name.textContent = player.name || "";
+
+    const score = document.createElement("span");
+    score.className = "rr-score";
+    score.textContent = player.score || `${player.wins || 0}W`;
+
+    row.append(place, name, score);
+    roundRobinScoreboard.appendChild(row);
+  });
 }
 
 function buildSide(side, xs, players) {
@@ -768,6 +866,8 @@ try {
     slot.querySelector(".name").textContent = name;
   });
 
+  renderRoundRobinScoreboard();
+
   (bracketData.active_matches || []).forEach(matchId => {
     const [topSlotId, bottomSlotId] = getMatchSlotIds(matchId);
 
@@ -788,7 +888,6 @@ try {
 fitBracketToScreen();
 window.addEventListener("resize", fitBracketToScreen);
 window.addEventListener("orientationchange", fitBracketToScreen);
-window.addEventListener("pagehide", sendBracketStateBeforeUnload);
 
 // Re-fit after fonts/layout have settled, which prevents tiny clipping on some displays.
 requestAnimationFrame(fitBracketToScreen);
@@ -799,13 +898,23 @@ document.addEventListener("fullscreenchange", fitBracketToScreen);
 // Useful for projectors/TVs where browser chrome disappears after page load.
 setTimeout(fitBracketToScreen, 250);
 
+async function pollBracketState() {
+  try {
+    const response = await fetch(bracketStateUrl, { cache: "no-store" });
+    if (!response.ok) return;
 
-document.addEventListener("keydown", (event) => {
-  if (event.ctrlKey && event.key.toLowerCase() === "z") {
-    event.preventDefault();
-    undoLastAction();
+    const state = await response.json();
+    const remoteVersion = Number(state._version || 0);
+
+    if (remoteVersion > bracketVersion) {
+      window.location.reload();
+    }
+  } catch (error) {
+    // Keep the display stable if the server is briefly unavailable.
   }
-});
+}
+
+window.setInterval(pollBracketState, 1500);
 </script>
 
 </body>

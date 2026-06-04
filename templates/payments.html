@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Payments</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #171717;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    a,
+    button {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #eeeeee;
+      color: #111;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    a.download {
+      background: #7CFF7C;
+      color: #111;
+    }
+
+    main {
+      padding: 18px;
+    }
+
+    .nav-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .week-badge {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #aaa;
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .metric,
+    .panel {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 12px;
+    }
+
+    .metric-label {
+      margin-bottom: 6px;
+      color: #aaa;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    .metric-value.positive {
+      color: #7CFF7C;
+    }
+
+    .metric-value.negative {
+      color: #ff9f9f;
+    }
+
+    .settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      color: #ddd;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    input[type="number"] {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #050505;
+      color: #f5f5f5;
+      padding: 9px 10px;
+      font-size: 16px;
+    }
+
+    select {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #050505;
+      color: #f5f5f5;
+      padding: 9px 10px;
+      font-size: 16px;
+    }
+
+    .mode-row,
+    .preset-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .choice {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid #444;
+      border-radius: 6px;
+      background: #101010;
+      padding: 8px 10px;
+    }
+
+    .choice input {
+      accent-color: #7CFF7C;
+    }
+
+    .preset-button {
+      border-color: #444;
+      background: #242424;
+      color: #f5f5f5;
+    }
+
+    .preset-button.active {
+      border-color: #7CFF7C;
+      background: #dfffdc;
+      color: #111;
+    }
+
+    .prize-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      grid-column: 1 / -1;
+    }
+
+    .notice {
+      margin: 0 0 12px;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #101010;
+      color: #ddd;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #303030;
+      padding: 9px 7px;
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: #aaa;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: #2a2a2a;
+      color: #ddd;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .status.member {
+      background: #7CFF7C;
+      color: #111;
+    }
+
+    .paid-cell {
+      min-width: 128px;
+    }
+
+    .paid-person {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+      color: #ddd;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .paid-person input {
+      width: 22px;
+      height: 22px;
+      accent-color: #7CFF7C;
+    }
+
+    .player-stack,
+    .status-stack {
+      display: grid;
+      gap: 4px;
+    }
+
+    .save-state {
+      margin-top: 10px;
+      color: #aaa;
+      font-size: 12px;
+    }
+
+    .empty {
+      color: #aaa;
+      padding: 18px 0 4px;
+    }
+
+    @media (max-width: 700px) {
+      header {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-actions {
+        width: 100%;
+      }
+
+      .week-badge {
+        position: static;
+        transform: none;
+      }
+
+      .nav-actions a {
+        flex: 1 1 auto;
+        text-align: center;
+      }
+
+      main {
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Payments</h1>
+    <div class="week-badge">{{ competition.display }}</div>
+    <div class="nav-actions">
+      <a class="secondary" href="{{ url_for('register') }}">Register Players</a>
+      <a class="secondary" href="{{ url_for('executive_games') }}">Executive Games</a>
+      <a href="{{ url_for('bracket') }}">Bracket Display</a>
+      <a class="download" href="{{ url_for('payments_pdf') }}">Download PDF</a>
+    </div>
+  </header>
+
+  <main>
+    <form method="POST" id="payments-form">
+      <div class="summary">
+        <div class="metric">
+          <div class="metric-label">Players</div>
+          <div class="metric-value">{{ summary.total_players }}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Paid</div>
+          <div class="metric-value" data-paid-count>{{ summary.paid_count }}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Income</div>
+          <div class="metric-value" data-income>${{ "%.2f"|format(summary.total_income) }}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Winnings</div>
+          <div class="metric-value" data-winnings>${{ "%.2f"|format(summary.winnings_total) }}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Profit/Loss</div>
+          <div class="metric-value {% if summary.profit_loss < 0 %}negative{% else %}positive{% endif %}" data-profit-loss>
+            ${{ "%.2f"|format(summary.profit_loss) }}
+          </div>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Settings</h2>
+        <div class="settings">
+          <label>
+            Payout type
+            <span class="mode-row">
+              <span class="choice">
+                <input type="radio" name="payout_mode" value="preset" {% if summary.payout_mode != "custom" %}checked{% endif %}>
+                Preset
+              </span>
+              <span class="choice">
+                <input type="radio" name="payout_mode" value="custom" {% if summary.payout_mode == "custom" %}checked{% endif %}>
+                Custom
+              </span>
+            </span>
+          </label>
+          <label>
+            Comp size
+            <select name="comp_size" data-comp-size>
+              {% for size in [32, 48, 64] %}
+                <option value="{{ size }}" {% if summary.comp_size == size %}selected{% endif %}>{{ size }} comp</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div>
+            <div class="metric-label">Presets</div>
+            <div class="preset-row">
+              {% for size, prizes in summary.preset_winnings.items() %}
+                <button
+                  type="button"
+                  class="preset-button {% if summary.comp_size == size and summary.payout_mode != 'custom' %}active{% endif %}"
+                  data-preset-size="{{ size }}"
+                  data-first="{{ "%.2f"|format(prizes[1]) }}"
+                  data-second="{{ "%.2f"|format(prizes[2]) }}"
+                  data-third="{{ "%.2f"|format(prizes[3]) }}"
+                >
+                  {{ size }}: ${{ "%.0f"|format(prizes[1]) }} / ${{ "%.0f"|format(prizes[2]) }} / ${{ "%.0f"|format(prizes[3]) }}
+                </button>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="prize-grid">
+            <label>
+              1st winnings
+              <input type="number" name="first_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[1]) }}">
+            </label>
+            <label>
+              2nd winnings
+              <input type="number" name="second_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[2]) }}">
+            </label>
+            <label>
+              3rd winnings
+              <input type="number" name="third_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[3]) }}">
+            </label>
+          </div>
+        </div>
+        <div class="metric-label">
+          {% if summary.doubles_comp %}
+            Doubles night: all players and buybacks pay $3.
+          {% else %}
+            Members pay $3. Non-members and buybacks pay $4.
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top: 14px;">
+        <h2>Winners</h2>
+        {% if summary.automatic_winners %}
+          <div class="notice">
+            Winners are detected from the completed round robin final.
+            {% if summary.round_robin_three_way_tie %}
+              This is a 3-way tie, so the total 1st/2nd/3rd winnings are split evenly.
+            {% endif %}
+          </div>
+        {% endif %}
+        <div class="settings">
+          {% for row in summary.payout_rows %}
+            <label>
+              {{ row.label }}
+              <select name="winner_{{ row.place }}" data-winner-select {% if summary.automatic_winners %}disabled{% endif %}>
+                <option value="">Not set</option>
+                {% for choice in summary.winner_choices %}
+                  <option value="{{ choice }}" {% if summary.winners[row.place|string] == choice %}selected{% endif %}>{{ choice }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          {% endfor %}
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Place</th>
+              <th>Winner</th>
+              <th>Base</th>
+              <th>Paid</th>
+              <th>Adjustment</th>
+            </tr>
+          </thead>
+          <tbody data-payout-rows>
+            {% for row in summary.payout_rows %}
+              <tr>
+                <td>{{ row.label }}</td>
+                <td data-payout-winner="{{ row.place }}">{{ row.winner_name or "Not set" }}</td>
+                <td data-payout-base="{{ row.place }}">${{ "%.2f"|format(row.base_winnings) }}</td>
+                <td data-payout-adjusted="{{ row.place }}">${{ "%.2f"|format(row.adjusted_winnings) }}</td>
+                <td data-payout-note="{{ row.place }}">{{ row.half_reason or "Full payout" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel" style="margin-top: 14px;">
+        <h2>Active Players</h2>
+
+        {% if summary.entries %}
+          <table>
+            <thead>
+              <tr>
+                <th class="paid-cell">Paid</th>
+                <th>Player</th>
+                <th>Status</th>
+                <th>Fee</th>
+                <th>Entry</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in summary.entries %}
+                <tr>
+                  <td class="paid-cell">
+                    {% for player in entry.players %}
+                      <label class="paid-person">
+                        <input
+                          type="checkbox"
+                          name="paid_player"
+                          value="{{ player.key }}"
+                          data-fee="{{ "%.2f"|format(player.fee) }}"
+                          {% if player.paid %}checked{% endif %}
+                          aria-label="Mark {{ player.name }} as paid"
+                        >
+                        {{ player.name }}
+                      </label>
+                    {% endfor %}
+                  </td>
+                  <td>
+                    <div class="player-stack">
+                      {% for player in entry.players %}
+                        <span>{{ player.name }}</span>
+                      {% endfor %}
+                    </div>
+                  </td>
+                  <td>
+                    <div class="status-stack">
+                      {% for player in entry.players %}
+                        <span class="status {% if player.is_member %}member{% endif %}">
+                          {% if player.is_member %}Member{% else %}Non-member{% endif %}
+                        </span>
+                      {% endfor %}
+                    </div>
+                  </td>
+                  <td>
+                    {% if entry.players|length > 1 %}
+                      ${{ "%.2f"|format(entry.players[0].fee) }} each / ${{ "%.2f"|format(entry.total_fee) }} total
+                    {% else %}
+                      ${{ "%.2f"|format(entry.total_fee) }}
+                    {% endif %}
+                  </td>
+                  <td>{{ entry.entry }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty">No active competition players yet.</div>
+        {% endif %}
+
+        <div class="save-state" data-save-state>Changes save automatically.</div>
+      </section>
+    </form>
+  </main>
+  <script>
+    const paymentsForm = document.getElementById("payments-form");
+    const saveState = document.querySelector("[data-save-state]");
+    const paidCount = document.querySelector("[data-paid-count]");
+    const income = document.querySelector("[data-income]");
+    const winnings = document.querySelector("[data-winnings]");
+    const profitLoss = document.querySelector("[data-profit-loss]");
+    const presetButtons = Array.from(document.querySelectorAll("[data-preset-size]"));
+    const compSizeSelect = document.querySelector("[data-comp-size]");
+    let saveTimer = null;
+
+    function money(value) {
+      return `$${Number(value || 0).toFixed(2)}`;
+    }
+
+    function activePayoutMode() {
+      return paymentsForm.querySelector("input[name='payout_mode']:checked")?.value || "preset";
+    }
+
+    function currentPrizeValues() {
+      return [
+        Number(paymentsForm.elements.first_winnings?.value || 0),
+        Number(paymentsForm.elements.second_winnings?.value || 0),
+        Number(paymentsForm.elements.third_winnings?.value || 0)
+      ];
+    }
+
+    function setPrizeValues(first, second, third) {
+      paymentsForm.elements.first_winnings.value = Number(first || 0).toFixed(2);
+      paymentsForm.elements.second_winnings.value = Number(second || 0).toFixed(2);
+      paymentsForm.elements.third_winnings.value = Number(third || 0).toFixed(2);
+    }
+
+    function updatePresetButtons() {
+      const selectedSize = compSizeSelect?.value || "";
+      const presetMode = activePayoutMode() === "preset";
+
+      presetButtons.forEach((button) => {
+        button.classList.toggle(
+          "active",
+          presetMode && button.dataset.presetSize === selectedSize
+        );
+      });
+    }
+
+    function applyPreset(size) {
+      const button = presetButtons.find((item) => item.dataset.presetSize === String(size));
+
+      if (!button) return;
+
+      compSizeSelect.value = button.dataset.presetSize;
+      paymentsForm.querySelector("input[name='payout_mode'][value='preset']").checked = true;
+      setPrizeValues(button.dataset.first, button.dataset.second, button.dataset.third);
+      updatePresetButtons();
+    }
+
+    function updatePaymentSummary() {
+      const checkedPayments = Array.from(paymentsForm.querySelectorAll("input[name='paid_player']:checked"));
+      const winningsValue = currentPrizeValues().reduce((total, value) => total + value, 0);
+      const incomeValue = checkedPayments.reduce((total, checkbox) => {
+        return total + Number(checkbox.dataset.fee || 0);
+      }, 0);
+      const profitValue = incomeValue - winningsValue;
+
+      paidCount.textContent = String(checkedPayments.length);
+      income.textContent = money(incomeValue);
+      winnings.textContent = money(winningsValue);
+      profitLoss.textContent = money(profitValue);
+      profitLoss.classList.toggle("negative", profitValue < 0);
+      profitLoss.classList.toggle("positive", profitValue >= 0);
+      updatePresetButtons();
+    }
+
+    function updateSummaryFromServer(summary) {
+      if (!summary) return;
+
+      paidCount.textContent = String(summary.paid_count || 0);
+      income.textContent = money(summary.total_income);
+      winnings.textContent = money(summary.winnings_total);
+      profitLoss.textContent = money(summary.profit_loss);
+      profitLoss.classList.toggle("negative", Number(summary.profit_loss || 0) < 0);
+      profitLoss.classList.toggle("positive", Number(summary.profit_loss || 0) >= 0);
+
+      (summary.payout_rows || []).forEach((row) => {
+        const place = row.place;
+        const winnerCell = document.querySelector(`[data-payout-winner="${place}"]`);
+        const baseCell = document.querySelector(`[data-payout-base="${place}"]`);
+        const adjustedCell = document.querySelector(`[data-payout-adjusted="${place}"]`);
+        const noteCell = document.querySelector(`[data-payout-note="${place}"]`);
+
+        if (winnerCell) winnerCell.textContent = row.winner_name || "Not set";
+        if (baseCell) baseCell.textContent = money(row.base_winnings);
+        if (adjustedCell) adjustedCell.textContent = money(row.adjusted_winnings);
+        if (noteCell) noteCell.textContent = row.half_reason || "Full payout";
+      });
+    }
+
+    async function savePayments() {
+      window.clearTimeout(saveTimer);
+      updatePaymentSummary();
+
+      if (saveState) {
+        saveState.textContent = "Saving...";
+      }
+
+      try {
+        const response = await fetch(paymentsForm.action || window.location.href, {
+          method: "POST",
+          headers: {
+            "X-Requested-With": "fetch"
+          },
+          body: new FormData(paymentsForm)
+        });
+
+        if (!response.ok) {
+          throw new Error("Save failed");
+        }
+
+        updateSummaryFromServer(await response.json());
+
+        if (saveState) {
+          saveState.textContent = "Saved.";
+        }
+      } catch (error) {
+        if (saveState) {
+          saveState.textContent = "Save failed. Try again.";
+        }
+      }
+    }
+
+    function scheduleSave() {
+      updatePaymentSummary();
+      if (saveState) {
+        saveState.textContent = "Changes save automatically.";
+      }
+      window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(savePayments, 250);
+    }
+
+    paymentsForm?.addEventListener("change", scheduleSave);
+    paymentsForm?.addEventListener("input", (event) => {
+      if (["first_winnings", "second_winnings", "third_winnings"].includes(event.target.name)) {
+        paymentsForm.querySelector("input[name='payout_mode'][value='custom']").checked = true;
+        scheduleSave();
+      }
+    });
+    presetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        applyPreset(button.dataset.presetSize);
+        scheduleSave();
+      });
+    });
+    compSizeSelect?.addEventListener("change", () => {
+      if (activePayoutMode() === "preset") {
+        applyPreset(compSizeSelect.value);
+      }
+    });
+    paymentsForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      savePayments();
+    });
+    updatePresetButtons();
+  </script>
+</body>
+</html>

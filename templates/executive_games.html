@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Executive Games</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #171717;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .nav-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .week-badge {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #aaa;
+      font-size: 13px;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+
+    a,
+    button {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #eeeeee;
+      color: #111;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    button.secondary,
+    a.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    button.danger {
+      background: #ffdddd;
+      border-color: #ff9f9f;
+    }
+
+    button.remove-player {
+      background: #2a1717;
+      border-color: #6c3434;
+      color: #ffd8d8;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    main {
+      padding: 18px 18px 88px;
+    }
+
+    .game-toolbar {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .filters a {
+      background: #222;
+      color: #ddd;
+    }
+
+    .filters a.active {
+      background: #7CFF7C;
+      border-color: #7CFF7C;
+      color: #111;
+    }
+
+    .game-search {
+      flex: 1 1 260px;
+      margin-left: auto;
+      max-width: 380px;
+    }
+
+    .game-search input {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #050505;
+      color: #f5f5f5;
+      padding: 9px 12px;
+      font-size: 15px;
+    }
+
+    .game-search input:focus {
+      border-color: #7CFF7C;
+      outline: none;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+
+    .round {
+      margin: 0 0 16px;
+      padding-top: 4px;
+      scroll-margin-top: 78px;
+    }
+
+    .round-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 7px;
+      border-bottom: 1px solid #444;
+      padding-bottom: 5px;
+    }
+
+    .round-heading h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .round-count {
+      color: #aaa;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .games {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 6px;
+    }
+
+    .game {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 6px;
+    }
+
+    .game.active {
+      border-color: #7CFF7C;
+    }
+
+    .game.played {
+      border-color: #777;
+      background: #202020;
+    }
+
+    .game-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+      color: #aaa;
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    .game-header > span:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status {
+      color: #111;
+      background: #ccc;
+      border-radius: 999px;
+      padding: 2px 5px;
+      font-size: 10px;
+      flex: 0 0 auto;
+    }
+
+    .status.active {
+      background: #7CFF7C;
+    }
+
+    .table-badge {
+      color: #050505;
+      background: #7CFF7C;
+      border: 1px solid #7CFF7C;
+      border-radius: 999px;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .status.played {
+      background: #d7d7d7;
+    }
+
+    .status.waiting {
+      background: #ffdd93;
+    }
+
+    .players {
+      display: grid;
+      gap: 2px;
+      margin-bottom: 6px;
+    }
+
+    .player {
+      min-height: 15px;
+      font-size: 13px;
+      font-weight: bold;
+      line-height: 1.12;
+    }
+
+    .missing {
+      color: #777;
+      font-weight: normal;
+    }
+
+    .winner {
+      color: #7CFF7C;
+    }
+
+    .rr-score-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 6px;
+      margin: 0 0 8px;
+    }
+
+    .rr-score-control {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 5px;
+    }
+
+    .rr-score-place {
+      color: #aaa;
+      font-size: 10px;
+      min-width: 18px;
+    }
+
+    .rr-score-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .rr-score-value {
+      min-width: 28px;
+      text-align: center;
+      color: #7CFF7C;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .rr-score-control form {
+      margin: 0;
+    }
+
+    .rr-score-control button {
+      width: 28px;
+      padding: 4px 0;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .controls {
+      display: grid;
+      gap: 4px;
+    }
+
+    .control-row {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .control-row form {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .control-row button {
+      width: 100%;
+      padding: 5px 6px;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .table-starts {
+      flex: 1 1 100%;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+    }
+
+    .table-starts form {
+      min-width: 0;
+    }
+
+    .secondary-actions {
+      border-top: 1px solid #303030;
+      padding-top: 4px;
+    }
+
+    .empty-round {
+      color: #777;
+      padding: 10px 0;
+    }
+
+    .round-jump-nav {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      background: #171717;
+      border-top: 1px solid #333;
+      box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+    }
+
+    .round-jump-nav a {
+      flex: 1 0 auto;
+      min-width: 86px;
+      text-align: center;
+      background: #7CFF7C;
+      border-color: #7CFF7C;
+      color: #111;
+    }
+
+    .jump-count {
+      display: inline-block;
+      min-width: 18px;
+      margin-left: 4px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.14);
+      padding: 1px 5px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 700px) {
+      header {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-actions,
+      .filters,
+      .game-search,
+      .controls,
+      .control-row {
+        width: 100%;
+        max-width: none;
+      }
+
+      .week-badge {
+        position: static;
+        transform: none;
+      }
+
+      .nav-actions a,
+      .filters a,
+      .control-row form,
+      .control-row button {
+        flex: 1 1 auto;
+      }
+
+      button,
+      a {
+        text-align: center;
+      }
+
+      main {
+        padding: 12px 12px 94px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Executive Games</h1>
+    <div class="week-badge">{{ competition.display }}</div>
+    <div class="nav-actions">
+      <a class="secondary" href="{{ url_for('register') }}">Register Players</a>
+      <a class="secondary" href="{{ url_for('payments') }}">Payments</a>
+      <a href="{{ url_for('bracket') }}">Bracket Display</a>
+    </div>
+  </header>
+
+  <main>
+    <div class="game-toolbar">
+      <nav class="filters" aria-label="Game filters">
+        <a class="{% if game_filter == 'all' %}active{% endif %}" href="{{ url_for('executive_games', filter='all') }}">All {{ counts.all }}</a>
+        <a class="{% if game_filter == 'unplayed' %}active{% endif %}" href="{{ url_for('executive_games', filter='unplayed') }}">Unplayed {{ counts.unplayed }}</a>
+        <a class="{% if game_filter == 'played' %}active{% endif %}" href="{{ url_for('executive_games', filter='played') }}">Played {{ counts.played }}</a>
+      </nav>
+
+      <label class="game-search" for="game-search">
+        <span class="sr-only">Search games by player name</span>
+        <input id="game-search" type="search" placeholder="Search player names" autocomplete="off">
+      </label>
+    </div>
+
+    <div id="game-search-empty" class="empty-round" hidden>No games match that search.</div>
+
+    {% if not groups %}
+      <div class="empty-round">No games in this view.</div>
+    {% endif %}
+
+    {% for group in groups %}
+      <section class="round" id="round-{{ group.key }}" data-round="{{ group.key }}">
+        <div class="round-heading">
+          <h2>{{ group.label }}</h2>
+          <span class="round-count" data-round-count>{{ group.games|length }} shown</span>
+        </div>
+
+        {% if group.games %}
+          {% if group.scoreboard and group.scoreboard.active %}
+            <div class="rr-score-controls" aria-label="{{ group.label }} score counters">
+              {% for finalist in group.scoreboard.players %}
+                <div class="rr-score-control">
+                  <span class="rr-score-place">{{ finalist.place or "-" }}</span>
+                  <span class="rr-score-name">{{ finalist.name }}</span>
+
+                  <form method="POST" action="{{ url_for('game_action_route') }}">
+                    <input type="hidden" name="filter" value="{{ game_filter }}">
+                    <input type="hidden" name="slot_id" value="{{ finalist.slot_id }}">
+                    <input type="hidden" name="score_delta" value="-1">
+                    <input type="hidden" name="action" value="round_robin_score">
+                    <button class="secondary" type="submit" aria-label="Subtract score from {{ finalist.name }}">-</button>
+                  </form>
+
+                  <span class="rr-score-value">{{ finalist.score }}</span>
+
+                  <form method="POST" action="{{ url_for('game_action_route') }}">
+                    <input type="hidden" name="filter" value="{{ game_filter }}">
+                    <input type="hidden" name="slot_id" value="{{ finalist.slot_id }}">
+                    <input type="hidden" name="score_delta" value="1">
+                    <input type="hidden" name="action" value="round_robin_score">
+                    <button type="submit" aria-label="Add score to {{ finalist.name }}">+</button>
+                  </form>
+                </div>
+              {% endfor %}
+              {% if group.scoreboard.three_way_tie %}
+                <form method="POST" action="{{ url_for('game_action_route') }}">
+                  <input type="hidden" name="filter" value="{{ game_filter }}">
+                  <input type="hidden" name="action" value="reset_round_robin_final">
+                  <button class="danger" type="submit">Reset Finals</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <div class="games">
+            {% for game in group.games %}
+              <article class="game {% if game.played %}played{% elif game.active %}active{% endif %}" data-played="{{ game.played | tojson }}">
+                <div class="game-header">
+                  <span>{{ game.display_id or game.id }}</span>
+                  {% if game.played %}
+                    <span class="status played">Played</span>
+                  {% elif game.active %}
+                    {% if game.table_number %}
+                      <span class="table-badge">T{{ game.table_number }}</span>
+                    {% else %}
+                      <span class="status active">Started</span>
+                    {% endif %}
+                  {% elif game.ready %}
+                    <span class="status">Ready</span>
+                  {% else %}
+                    <span class="status waiting">Waiting</span>
+                  {% endif %}
+                </div>
+
+                <div class="players">
+                  {% for player in game.players %}
+                    <div class="player {% if game.winner_name == player.name and player.name %}winner{% endif %}">
+                      {% if player.name %}
+                        {{ player.name }}
+                      {% else %}
+                        <span class="missing">Open slot</span>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+
+                <div class="controls">
+                  <div class="control-row primary-actions">
+                    {% if not game.played and not game.active and needs_table_choice %}
+                      <div class="table-starts" aria-label="Start {{ game.display_id or game.id }} at a table">
+                        {% for table_number in available_tables %}
+                          <form method="POST" action="{{ url_for('game_action_route') }}">
+                            <input type="hidden" name="filter" value="{{ game_filter }}">
+                            <input type="hidden" name="match_id" value="{{ game.id }}">
+                            <input type="hidden" name="table_number" value="{{ table_number }}">
+                            <input type="hidden" name="action" value="start">
+                            <button type="submit" {% if not game.ready %}disabled{% endif %}>Start T{{ table_number }}</button>
+                          </form>
+                        {% endfor %}
+                      </div>
+                    {% else %}
+                      <form method="POST" action="{{ url_for('game_action_route') }}">
+                        <input type="hidden" name="filter" value="{{ game_filter }}">
+                        <input type="hidden" name="match_id" value="{{ game.id }}">
+                        <input type="hidden" name="action" value="start">
+                        <button type="submit" {% if not game.ready or game.played or game.active or not available_tables %}disabled{% endif %}>Start</button>
+                      </form>
+                    {% endif %}
+
+                    {% for player in game.players %}
+                      <form method="POST" action="{{ url_for('game_action_route') }}">
+                        <input type="hidden" name="filter" value="{{ game_filter }}">
+                        <input type="hidden" name="match_id" value="{{ game.id }}">
+                        <input type="hidden" name="winner_slot_id" value="{{ player.slot_id }}">
+                        <input type="hidden" name="action" value="win">
+                        <button class="secondary" type="submit" {% if not game.ready or game.played or not game.active or not player.name %}disabled{% endif %}>{{ player.name or "Winner" }}</button>
+                      </form>
+                    {% endfor %}
+                  </div>
+
+                  <div class="control-row secondary-actions">
+                    <form method="POST" action="{{ url_for('game_action_route') }}">
+                      <input type="hidden" name="filter" value="{{ game_filter }}">
+                      <input type="hidden" name="match_id" value="{{ game.id }}">
+                      <input type="hidden" name="action" value="reset">
+                      <button class="danger" type="submit">Reset</button>
+                    </form>
+
+                    {% if game.round_key == 0 %}
+                      {% for player in game.players %}
+                        {% if player.name %}
+                          <form method="POST" action="{{ url_for('game_action_route') }}">
+                            <input type="hidden" name="filter" value="{{ game_filter }}">
+                            <input type="hidden" name="match_id" value="{{ game.id }}">
+                            <input type="hidden" name="slot_id" value="{{ player.slot_id }}">
+                            <input type="hidden" name="action" value="delete_first_round_player">
+                            <button class="remove-player" type="submit" aria-label="Remove {{ player.name }}">Remove {{ player.name }}</button>
+                          </form>
+                        {% endif %}
+                      {% endfor %}
+                    {% endif %}
+                  </div>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+    {% endfor %}
+  </main>
+
+  {% if round_jump_links %}
+    <nav class="round-jump-nav" id="round-jump-nav" aria-label="Jump to active rounds">
+      {% for round in round_jump_links %}
+        <a href="#round-{{ round.key }}" data-round-jump="{{ round.key }}">
+          {{ round.short_label }}
+          <span class="jump-count" data-round-jump-count>{{ round.count }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+  {% endif %}
+
+  <script>
+    const initialBracketVersion = {{ bracket_version | tojson }};
+    const stateUrl = {{ url_for("bracket_state_route") | tojson }};
+    const gameSearchInput = document.getElementById("game-search");
+    const gameSearchEmpty = document.getElementById("game-search-empty");
+    const gameSearchStorageKey = "poolCompExecutiveGameSearch";
+    const scrollStorageKey = `poolCompExecutiveScroll:${window.location.pathname}${window.location.search}`;
+    const gameSections = Array.from(document.querySelectorAll(".round"));
+    const gameCards = Array.from(document.querySelectorAll(".game"));
+    const roundJumpNav = document.getElementById("round-jump-nav");
+    const roundJumpLinks = Array.from(document.querySelectorAll("[data-round-jump]"));
+    let latestBracketVersion = Number(initialBracketVersion) || 0;
+
+    gameCards.forEach(game => {
+      const playerNames = Array.from(game.querySelectorAll(".player"))
+        .map(player => player.textContent || "")
+        .join(" ");
+      const gameId = game.querySelector(".game-header span")?.textContent || "";
+      game.dataset.searchText = `${gameId} ${playerNames}`.toLocaleLowerCase();
+    });
+
+    function setStoredGameSearch(value) {
+      try {
+        window.sessionStorage.setItem(gameSearchStorageKey, value);
+      } catch (error) {
+        // Search still works even when storage is unavailable.
+      }
+    }
+
+    function getStoredGameSearch() {
+      try {
+        return window.sessionStorage.getItem(gameSearchStorageKey) || "";
+      } catch (error) {
+        return "";
+      }
+    }
+
+    function rememberScrollPosition() {
+      try {
+        window.sessionStorage.setItem(scrollStorageKey, String(window.scrollY || 0));
+      } catch (error) {
+        // Navigation still works even when storage is unavailable.
+      }
+    }
+
+    function restoreScrollPosition() {
+      let storedScroll = null;
+
+      try {
+        storedScroll = window.sessionStorage.getItem(scrollStorageKey);
+        window.sessionStorage.removeItem(scrollStorageKey);
+      } catch (error) {
+        storedScroll = null;
+      }
+
+      if (storedScroll === null) return;
+
+      const scrollTop = Number(storedScroll);
+      if (!Number.isFinite(scrollTop)) return;
+
+      requestAnimationFrame(() => {
+        window.scrollTo({
+          top: scrollTop,
+          left: 0,
+          behavior: "auto"
+        });
+      });
+    }
+
+    function applyGameSearch() {
+      if (!gameSearchInput) return;
+
+      const query = gameSearchInput.value.trim().toLocaleLowerCase();
+      let totalVisible = 0;
+
+      gameSections.forEach(section => {
+        const games = Array.from(section.querySelectorAll(".game"));
+        let visibleInRound = 0;
+
+        games.forEach(game => {
+          const isMatch = !query || game.dataset.searchText.includes(query);
+          game.hidden = !isMatch;
+
+          if (isMatch) {
+            visibleInRound += 1;
+          }
+        });
+
+        section.hidden = Boolean(query) && visibleInRound === 0;
+        totalVisible += visibleInRound;
+
+        const count = section.querySelector("[data-round-count]");
+        if (count) {
+          const shownCount = query ? visibleInRound : games.length;
+          count.textContent = `${shownCount} shown`;
+        }
+      });
+
+      if (gameSearchEmpty) {
+        gameSearchEmpty.hidden = !query || totalVisible > 0;
+      }
+
+      updateRoundJumpNav();
+    }
+
+    function updateRoundJumpNav() {
+      if (!roundJumpLinks.length) return;
+
+      let visibleLinks = 0;
+
+      roundJumpLinks.forEach(link => {
+        const section = document.getElementById(`round-${link.dataset.roundJump}`);
+        const visibleUnplayedGames = section
+          ? Array.from(section.querySelectorAll(".game")).filter(game => {
+              return !game.hidden && game.dataset.played !== "true";
+            })
+          : [];
+        const shouldShow = visibleUnplayedGames.length > 0;
+        const count = link.querySelector("[data-round-jump-count]");
+
+        link.hidden = !shouldShow;
+
+        if (count) {
+          count.textContent = String(visibleUnplayedGames.length);
+        }
+
+        if (shouldShow) {
+          visibleLinks += 1;
+        }
+      });
+
+      if (roundJumpNav) {
+        roundJumpNav.hidden = visibleLinks === 0;
+      }
+    }
+
+    if (gameSearchInput) {
+      gameSearchInput.value = getStoredGameSearch();
+      gameSearchInput.addEventListener("input", () => {
+        setStoredGameSearch(gameSearchInput.value);
+        applyGameSearch();
+      });
+      applyGameSearch();
+    } else {
+      updateRoundJumpNav();
+    }
+
+    document.querySelectorAll("form[action='{{ url_for('game_action_route') }}']").forEach(form => {
+      form.addEventListener("submit", rememberScrollPosition);
+    });
+
+    restoreScrollPosition();
+
+    async function pollBracketVersion() {
+      try {
+        const response = await fetch(stateUrl, { cache: "no-store" });
+        if (!response.ok) return;
+
+        const state = await response.json();
+        const remoteVersion = Number(state._version) || 0;
+
+        if (remoteVersion > latestBracketVersion) {
+          rememberScrollPosition();
+          window.location.reload();
+        }
+      } catch (error) {
+        // Keep the control page usable during brief server hiccups.
+      }
+    }
+
+    window.setInterval(pollBracketVersion, 1500);
+  </script>
+</body>
+</html>
