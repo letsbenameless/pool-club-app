@@ -308,6 +308,7 @@
     <div class="nav-actions">
       <a class="secondary" href="{{ url_for('register') }}">Register Players</a>
       <a class="secondary" href="{{ url_for('executive_games') }}">Executive Games</a>
+      <a class="secondary" href="{{ url_for('bracket_settings') }}">Bracket Settings</a>
       <a href="{{ url_for('bracket') }}">Bracket Display</a>
       <a class="download" href="{{ url_for('payments_pdf') }}">Download PDF</a>
     </div>
@@ -534,6 +535,8 @@
     const presetButtons = Array.from(document.querySelectorAll("[data-preset-size]"));
     const compSizeSelect = document.querySelector("[data-comp-size]");
     let saveTimer = null;
+    let saveInFlight = false;
+    let saveAgain = false;
 
     function money(value) {
       return `$${Number(value || 0).toFixed(2)}`;
@@ -623,7 +626,15 @@
 
     async function savePayments() {
       window.clearTimeout(saveTimer);
+      saveTimer = null;
       updatePaymentSummary();
+
+      if (saveInFlight) {
+        saveAgain = true;
+        return;
+      }
+
+      saveInFlight = true;
 
       if (saveState) {
         saveState.textContent = "Saving...";
@@ -650,6 +661,13 @@
       } catch (error) {
         if (saveState) {
           saveState.textContent = "Save failed. Try again.";
+        }
+      } finally {
+        saveInFlight = false;
+
+        if (saveAgain) {
+          saveAgain = false;
+          savePayments();
         }
       }
     }

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bracket Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #171717;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    a,
+    button {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #eeeeee;
+      color: #111;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.secondary,
+    button.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    main {
+      padding: 18px;
+    }
+
+    .nav-actions,
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .panel {
+      max-width: 760px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 12px;
+    }
+
+    .settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: #ddd;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .hint {
+      color: #aaa;
+      font-size: 12px;
+      font-weight: normal;
+      line-height: 1.35;
+    }
+
+    .color-row {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .swatch {
+      width: 32px;
+      height: 32px;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: var(--swatch);
+    }
+
+    .preset-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0 14px;
+    }
+
+    .preset-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    .preset-swatch {
+      width: 16px;
+      height: 16px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: var(--swatch);
+    }
+
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #050505;
+      color: #f5f5f5;
+      padding: 9px 10px;
+      font-size: 16px;
+    }
+
+    input:focus {
+      border-color: #FF7900;
+      outline: none;
+    }
+
+    .actions {
+      justify-content: flex-start;
+      margin-top: 14px;
+    }
+
+    .save-state {
+      margin-top: 10px;
+      color: #aaa;
+      font-size: 12px;
+    }
+
+    @media (max-width: 700px) {
+      header {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-actions {
+        width: 100%;
+      }
+
+      .nav-actions a,
+      .actions button {
+        flex: 1 1 auto;
+        text-align: center;
+      }
+
+      main {
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Bracket Settings</h1>
+    <div class="nav-actions">
+      <a class="secondary" href="{{ url_for('register') }}">Register Players</a>
+      <a href="{{ url_for('bracket') }}">Bracket Display</a>
+    </div>
+  </header>
+
+  <main>
+    <form
+      class="panel"
+      method="POST"
+      action="{{ url_for('bracket_settings') }}"
+      autocomplete="off"
+      id="bracket-settings-form"
+      data-save-url="{{ url_for('bracket_settings') }}"
+    >
+      <h2>Colours</h2>
+      <div class="hint" style="margin-bottom: 12px;">
+        Use hex values such as #FF7900 or RGB values such as rgb(255, 121, 0).
+      </div>
+      <div class="hint">Click a preset to apply it to the selected colour field.</div>
+      <div class="preset-grid" aria-label="Preset colours">
+        {% for preset in presets %}
+          <button
+            class="preset-button"
+            type="button"
+            data-preset-color="{{ preset.value }}"
+          >
+            <span class="preset-swatch" style="--swatch: {{ preset.value }}"></span>
+            {{ preset.name }}
+          </button>
+        {% endfor %}
+      </div>
+
+      <div class="settings">
+        <label>
+          Highlight text
+          <span class="hint">Active games, hover names, round robin finalists, and round robin scores.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.highlight_color }}"></span>
+            <input name="highlight_color" value="{{ settings.highlight_color }}" required>
+          </span>
+        </label>
+
+        <label>
+          Remove hover text
+          <span class="hint">First-round removable player hover colour.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.remove_hover_color }}"></span>
+            <input name="remove_hover_color" value="{{ settings.remove_hover_color }}" required>
+          </span>
+        </label>
+
+        <label>
+          Table badge background
+          <span class="hint">Table number badge shown on active bracket games.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.table_badge_background }}"></span>
+            <input name="table_badge_background" value="{{ settings.table_badge_background }}" required>
+          </span>
+        </label>
+
+        <label>
+          Table badge text
+          <span class="hint">Text colour inside the table number badge.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.table_badge_text }}"></span>
+            <input name="table_badge_text" value="{{ settings.table_badge_text }}" required>
+          </span>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Save Colours</button>
+        <button class="secondary" type="submit" name="action" value="reset">Reset Defaults</button>
+      </div>
+      <div class="save-state" data-save-state>Changes save automatically.</div>
+    </form>
+  </main>
+  <script>
+    const settingsForm = document.getElementById("bracket-settings-form");
+    const saveState = document.querySelector("[data-save-state]");
+    const colorInputs = Array.from(settingsForm.querySelectorAll("input"));
+    const presetButtons = Array.from(document.querySelectorAll("[data-preset-color]"));
+    let activeColorInput = colorInputs[0] || null;
+    let saveTimer = null;
+    let saveInFlight = false;
+    let saveAgain = false;
+    let pendingAction = "";
+
+    function updateSwatches() {
+      colorInputs.forEach(input => {
+        const swatch = input.closest(".color-row")?.querySelector(".swatch");
+        if (swatch) {
+          swatch.style.setProperty("--swatch", input.value);
+        }
+      });
+    }
+
+    async function saveSettings(action = "") {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+      updateSwatches();
+
+      if (saveInFlight) {
+        saveAgain = true;
+        pendingAction = action || pendingAction;
+        return;
+      }
+
+      saveInFlight = true;
+      const actionToSave = action || pendingAction;
+      pendingAction = "";
+
+      if (saveState) {
+        saveState.textContent = "Saving...";
+      }
+
+      const formData = new FormData(settingsForm);
+      formData.set("_ajax", "1");
+      if (actionToSave) {
+        formData.set("action", actionToSave);
+      }
+
+      try {
+        const response = await fetch(settingsForm.dataset.saveUrl, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "X-Requested-With": "fetch"
+          },
+          body: formData
+        });
+
+        if (!response.ok) {
+          const message = await response.text();
+          throw new Error(message || "Save failed");
+        }
+
+        const contentType = response.headers.get("Content-Type") || "";
+        if (!contentType.includes("application/json")) {
+          const message = await response.text();
+          throw new Error(message || "Server did not return JSON");
+        }
+
+        const settings = await response.json();
+        colorInputs.forEach(input => {
+          if (settings[input.name]) {
+            input.value = settings[input.name];
+          }
+        });
+        updateSwatches();
+
+        if (saveState) {
+          saveState.textContent = "Saved. Bracket display will update automatically.";
+        }
+      } catch (error) {
+        if (saveState) {
+          saveState.textContent = `Save failed. ${error.message || "Try again."}`;
+        }
+      } finally {
+        saveInFlight = false;
+
+        if (saveAgain) {
+          saveAgain = false;
+          saveSettings();
+        }
+      }
+    }
+
+    function scheduleSave() {
+      if (saveState) {
+        saveState.textContent = "Changes save automatically.";
+      }
+      window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(saveSettings, 250);
+    }
+
+    colorInputs.forEach(input => {
+      input.addEventListener("focus", () => {
+        activeColorInput = input;
+      });
+      input.addEventListener("input", scheduleSave);
+      input.addEventListener("change", scheduleSave);
+    });
+
+    presetButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        if (!activeColorInput) return;
+        activeColorInput.value = button.dataset.presetColor;
+        activeColorInput.focus();
+        scheduleSave();
+      });
+    });
+
+    settingsForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const submitter = event.submitter || document.activeElement;
+      const action = submitter?.name === "action" ? submitter.value : "";
+      saveSettings(action);
+    });
+
+    updateSwatches();
+  </script>
+</body>
+</html>

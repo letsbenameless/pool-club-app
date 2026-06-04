@@ -3,6 +3,13 @@
 <head>
   <title>64 Player Split Bracket - Compact Line Style</title>
   <style>
+    :root {
+      --bracket-highlight: {{ bracket_settings.highlight_color }};
+      --bracket-remove-hover: {{ bracket_settings.remove_hover_color }};
+      --bracket-table-badge-bg: {{ bracket_settings.table_badge_background }};
+      --bracket-table-badge-text: {{ bracket_settings.table_badge_text }};
+    }
+
     html,
     body {
       margin: 0;
@@ -121,7 +128,7 @@
     }
 
     .rr-score {
-      color: #7CFF7C;
+      color: var(--bracket-highlight);
       font-weight: bold;
     }
 
@@ -137,20 +144,20 @@
     }
 
     .name:hover {
-      color: #7CFF7C;
+      color: var(--bracket-highlight);
     }
 
     .first-round-removable .name:hover {
-      color: #ff7c7c;
+      color: var(--bracket-remove-hover);
     }
 
     .active-match .name {
-      color: #7CFF7C;
+      color: var(--bracket-highlight);
       font-weight: bold;
     }
 
     .round-robin-finalist .name {
-      color: #7CFF7C;
+      color: var(--bracket-highlight);
       font-weight: bold;
     }
 
@@ -160,8 +167,8 @@
       bottom: 2px;
       font-size: 9px;
       font-weight: bold;
-      color: #050505;
-      background: #7CFF7C;
+      color: var(--bracket-table-badge-text);
+      background: var(--bracket-table-badge-bg);
       padding: 1px 4px;
       border-radius: 4px;
     }
@@ -180,6 +187,7 @@
       font-size: 13px;
       font-weight: bold;
     }
+
   </style>
 </head>
 
@@ -200,6 +208,7 @@ const MAX_ACTIVE_MATCHES = 3;
 const bracketData = {{ bracket_data | tojson }};
 const bracketStateUrl = {{ url_for("bracket_state_route") | tojson }};
 const bracketVersion = Number(bracketData._version || 0);
+const bracketSettingsVersion = Number({{ bracket_settings._version | tojson }}) || 0;
 console.log("bracketData:", bracketData);
 
 const bracket = document.getElementById("bracket");
@@ -922,8 +931,9 @@ async function pollBracketState() {
 
     const state = await response.json();
     const remoteVersion = Number(state._version || 0);
+    const remoteSettingsVersion = Number(state.bracket_settings_version || 0);
 
-    if (remoteVersion > bracketVersion) {
+    if (remoteVersion > bracketVersion || remoteSettingsVersion > bracketSettingsVersion) {
       window.location.reload();
     }
   } catch (error) {

@@ -31,6 +31,7 @@ TEAM_SEPARATOR_RE = re.compile(r"(?:[&+/,.]|\s{2,})")
 RATING_TEAM_SEPARATOR_RE = re.compile(r"(?:[&+/,]|\s{2,})")
 REGISTRATION_STATE_ID = 1
 FINANCE_STATE_ID = 1
+BRACKET_SETTINGS_ID = 1
 REGISTRATION_FIELDS = ("new_players", "late_players", "buybacks")
 SIDE_ROUNDS = [32, 16, 8, 4, 2, 1]
 GAME_ROUND_LABELS = {
@@ -66,6 +67,23 @@ PRESET_WINNINGS = {
     64: {1: 60.0, 2: 45.0, 3: 30.0},
 }
 PAYOUT_PLACES = (1, 2, 3)
+DEFAULT_BRACKET_SETTINGS = {
+    "highlight_color": "#FF7900",
+    "remove_hover_color": "#ff7c7c",
+    "table_badge_background": "#FF7900",
+    "table_badge_text": "#050505",
+}
+BRACKET_COLOR_PRESETS = [
+    {"name": "Orange", "value": "#FF7900"},
+    {"name": "Green", "value": "#7CFF7C"},
+    {"name": "Blue", "value": "#4DA3FF"},
+    {"name": "Pink", "value": "#FF5FA2"},
+    {"name": "Yellow", "value": "#FFD447"},
+    {"name": "White", "value": "#f2f2f2"},
+]
+CSS_COLOR_RE = re.compile(
+    r"^(#[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?|rgb\(\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*,\s*(?:25[0-5]|2[0-4]\d|1?\d?\d)\s*\))$"
+)
 
 
 def competition_context_for_date(date_key=None):
@@ -100,6 +118,7 @@ def init_db():
         ensure_app_state_schema(conn)
         ensure_registration_state_schema(conn)
         ensure_finance_state_schema(conn)
+        ensure_bracket_settings_schema(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS players (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,6 +172,60 @@ def init_db():
             FROM match_results
         """)
         conn.commit()
+
+
+def clean_css_color(value, fallback):
+    color = str(value or "").strip()
+
+    if CSS_COLOR_RE.fullmatch(color):
+        return color
+
+    return fallback
+
+
+def wants_json_response():
+    return (
+        request.form.get("_ajax") == "1"
+        or request.args.get("_ajax") == "1"
+        or request.headers.get("X-Requested-With") == "fetch"
+    )
+
+
+def ensure_bracket_settings_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bracket_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            highlight_color TEXT NOT NULL DEFAULT '#FF7900',
+            remove_hover_color TEXT NOT NULL DEFAULT '#ff7c7c',
+            table_badge_background TEXT NOT NULL DEFAULT '#FF7900',
+            table_badge_text TEXT NOT NULL DEFAULT '#050505',
+            version INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(bracket_settings)").fetchall()
+    }
+
+    if "version" not in columns:
+        conn.execute("ALTER TABLE bracket_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
+
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO bracket_settings (
+            id, highlight_color, remove_hover_color,
+            table_badge_background, table_badge_text, version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+        """,
+        (
+            BRACKET_SETTINGS_ID,
+            DEFAULT_BRACKET_SETTINGS["highlight_color"],
+            DEFAULT_BRACKET_SETTINGS["remove_hover_color"],
+            DEFAULT_BRACKET_SETTINGS["table_badge_background"],
+            DEFAULT_BRACKET_SETTINGS["table_badge_text"],
+        )
+    )
 
 
 def ensure_registration_state_schema(conn):
@@ -621,6 +694,63 @@ def save_state(state):
     with closing(get_db()) as conn:
         save_state_with_conn(conn, state)
         conn.commit()
+
+
+def load_bracket_settings():
+    with closing(get_db()) as conn:
+        ensure_bracket_settings_schema(conn)
+        row = conn.execute(
+            """
+            SELECT highlight_color, remove_hover_color,
+                   table_badge_background, table_badge_text, version
+            FROM bracket_settings
+            WHERE id = ?
+            """,
+            (BRACKET_SETTINGS_ID,)
+        ).fetchone()
+
+    settings = dict(DEFAULT_BRACKET_SETTINGS)
+
+    if row:
+        for key, fallback in DEFAULT_BRACKET_SETTINGS.items():
+            settings[key] = clean_css_color(row[key], fallback)
+        settings["_version"] = int(row["version"] or 0)
+    else:
+        settings["_version"] = 0
+
+    return settings
+
+
+def save_bracket_settings(form):
+    values = {
+        key: clean_css_color(form.get(key), fallback)
+        for key, fallback in DEFAULT_BRACKET_SETTINGS.items()
+    }
+
+    with closing(get_db()) as conn:
+        ensure_bracket_settings_schema(conn)
+        conn.execute(
+            """
+            UPDATE bracket_settings
+            SET highlight_color = ?,
+                remove_hover_color = ?,
+                table_badge_background = ?,
+                table_badge_text = ?,
+                version = version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                values["highlight_color"],
+                values["remove_hover_color"],
+                values["table_badge_background"],
+                values["table_badge_text"],
+                BRACKET_SETTINGS_ID,
+            )
+        )
+        conn.commit()
+
+    return values
 
 
 def clean_registration_client_id(client_id):
@@ -3004,13 +3134,42 @@ def bracket():
 
     state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
 
-    return render_template("bracket.html", bracket_data=state)
+    return render_template(
+        "bracket.html",
+        bracket_data=state,
+        bracket_settings=load_bracket_settings()
+    )
+
+
+@app.route("/bracket_settings", methods=["GET", "POST"])
+def bracket_settings():
+    if request.method == "POST":
+        if request.form.get("action") == "reset":
+            settings = save_bracket_settings(DEFAULT_BRACKET_SETTINGS)
+        else:
+            settings = save_bracket_settings(request.form)
+
+        if wants_json_response():
+            return {**settings, "_version": load_bracket_settings().get("_version", 0)}
+
+        return redirect(url_for("bracket_settings"))
+
+    if wants_json_response():
+        return load_bracket_settings()
+
+    return render_template(
+        "bracket_settings.html",
+        settings=load_bracket_settings(),
+        defaults=DEFAULT_BRACKET_SETTINGS,
+        presets=BRACKET_COLOR_PRESETS,
+    )
 
 
 @app.route("/bracket_state")
 def bracket_state_route():
     state = normalize_state(load_state() or empty_state())
     state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
+    state["bracket_settings_version"] = load_bracket_settings().get("_version", 0)
     return state
 
 
