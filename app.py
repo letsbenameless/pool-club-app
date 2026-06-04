@@ -69,7 +69,7 @@ PAYOUT_PLACES = (1, 2, 3)
 
 
 def competition_context_for_date(date_key=None):
-    comp_date = clean_date(date_key or today_key())
+    comp_date = clean_date(date_key or most_recent_tuesday_key())
     return {
         "date": comp_date.isoformat(),
         "date_label": format_comp_date(comp_date),
@@ -188,6 +188,7 @@ def ensure_finance_state_schema(conn):
             second_winnings REAL NOT NULL DEFAULT 45,
             third_winnings REAL NOT NULL DEFAULT 30,
             winners TEXT NOT NULL DEFAULT '{}',
+            comp_date TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -203,6 +204,7 @@ def ensure_finance_state_schema(conn):
         "second_winnings": "REAL NOT NULL DEFAULT 45",
         "third_winnings": "REAL NOT NULL DEFAULT 30",
         "winners": "TEXT NOT NULL DEFAULT '{}'",
+        "comp_date": "TEXT NOT NULL DEFAULT ''",
     }
 
     for column, definition in finance_columns.items():
@@ -212,8 +214,8 @@ def ensure_finance_state_schema(conn):
     conn.execute("""
         INSERT OR IGNORE INTO finance_state (
             id, entry_fee, winnings_total, payments, payout_mode, comp_size,
-            first_winnings, second_winnings, third_winnings, winners, updated_at
-        ) VALUES (?, 0, 0, '{}', 'preset', 64, 60, 45, 30, '{}', CURRENT_TIMESTAMP)
+            first_winnings, second_winnings, third_winnings, winners, comp_date, updated_at
+        ) VALUES (?, 0, 0, '{}', 'preset', 64, 60, 45, 30, '{}', '', CURRENT_TIMESTAMP)
     """, (FINANCE_STATE_ID,))
 
     conn.execute("""
@@ -680,6 +682,25 @@ def today_key():
     return dt.date.today().isoformat()
 
 
+def clean_date_key(value, fallback=None):
+    fallback = fallback or most_recent_tuesday_key()
+
+    try:
+        return dt.date.fromisoformat(str(value or "")).isoformat()
+    except ValueError:
+        return fallback
+
+
+def most_recent_tuesday_key(date_key=None):
+    try:
+        current_date = dt.date.fromisoformat(str(date_key or today_key()))
+    except ValueError:
+        current_date = dt.date.today()
+
+    days_since_tuesday = (current_date.weekday() - 1) % 7
+    return (current_date - dt.timedelta(days=days_since_tuesday)).isoformat()
+
+
 def semester_key_for_date(date_key=None):
     try:
         comp_date = dt.date.fromisoformat(str(date_key or today_key()))
@@ -744,7 +765,7 @@ def load_finance_state():
             """
             SELECT entry_fee, winnings_total, payments, payout_mode,
                    comp_size, first_winnings, second_winnings,
-                   third_winnings, winners
+                   third_winnings, winners, comp_date
             FROM finance_state
             WHERE id = ?
             """,
@@ -760,6 +781,7 @@ def load_finance_state():
             "comp_size": 64,
             "prizes": {1: 60.0, 2: 45.0, 3: 30.0},
             "winners": clean_winner_map({}),
+            "comp_date": most_recent_tuesday_key(),
         }
 
     return {
@@ -774,10 +796,11 @@ def load_finance_state():
             3: clean_money_value(row["third_winnings"]),
         },
         "winners": clean_winner_map(row["winners"]),
+        "comp_date": clean_date_key(row["comp_date"]),
     }
 
 
-def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winners):
+def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winners, comp_date):
     clean_payments = {
         str(key): bool(value)
         for key, value in payments.items()
@@ -790,6 +813,7 @@ def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winn
     clean_winners = clean_winner_map(winners)
     payout_mode = clean_payout_mode(payout_mode)
     comp_size = clean_comp_size(comp_size)
+    comp_date = clean_date_key(comp_date)
 
     with closing(get_db()) as conn:
         ensure_finance_state_schema(conn)
@@ -805,6 +829,7 @@ def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winn
                 second_winnings = ?,
                 third_winnings = ?,
                 winners = ?,
+                comp_date = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -818,6 +843,7 @@ def save_finance_state(entry_fee, payments, payout_mode, comp_size, prizes, winn
                 clean_prizes[2],
                 clean_prizes[3],
                 json_dumps_compact(clean_winners),
+                comp_date,
                 FINANCE_STATE_ID,
             )
         )
@@ -1307,7 +1333,7 @@ def payout_rows_for_round_robin_tie(winners, prizes, entries=None, comp_date=Non
 
 
 def save_comp_results_and_snapshot(summary):
-    comp_date = today_key()
+    comp_date = clean_date_key(summary.get("comp_date"))
     semester_key = semester_key_for_date(comp_date)
     year_key = year_key_for_date(comp_date)
 
@@ -1519,6 +1545,7 @@ def finance_summary():
     doubles_comp = is_doubles_comp(players)
     default_size = default_comp_size_for_players(players)
     comp_size, payout_mode, prizes = payout_prizes_for_state(finance_state, players)
+    comp_date = clean_date_key(finance_state.get("comp_date"))
     automatic_winners, round_robin_three_way_tie = automatic_winners_from_round_robin(state)
     winners = automatic_winners or clean_winner_map(finance_state.get("winners"))
     active_keys = {player["key"] for player in players}
@@ -1539,9 +1566,9 @@ def finance_summary():
     )
     entries = finance_entries_from_players(players)
     if round_robin_three_way_tie:
-        payout_rows = payout_rows_for_round_robin_tie(winners, prizes, entries)
+        payout_rows = payout_rows_for_round_robin_tie(winners, prizes, entries, comp_date)
     else:
-        payout_rows = payout_rows_for_winners(winners, prizes, entries)
+        payout_rows = payout_rows_for_winners(winners, prizes, entries, comp_date)
 
     winnings_total = clean_money_value(
         sum(row["adjusted_winnings"] for row in payout_rows)
@@ -1560,6 +1587,8 @@ def finance_summary():
         "payout_mode": payout_mode,
         "comp_size": comp_size,
         "default_comp_size": default_size,
+        "comp_date": comp_date,
+        "comp_date_display": competition_context_for_date(comp_date)["display"],
         "prizes": prizes,
         "winners": winners,
         "automatic_winners": bool(automatic_winners),
@@ -3106,6 +3135,7 @@ def payments():
         active_players = active_comp_players()
         state = normalize_state(load_state() or empty_state())
         paid_keys = set(request.form.getlist("paid_player"))
+        comp_date = clean_date_key(request.form.get("comp_date"))
         payments = {
             player["key"]: player["key"] in paid_keys
             for player in active_players
@@ -3140,7 +3170,8 @@ def payments():
             payout_mode,
             comp_size,
             prizes,
-            winners
+            winners,
+            comp_date
         )
         summary = finance_summary()
         save_comp_results_and_snapshot(summary)
@@ -3161,7 +3192,7 @@ def payments_pdf():
     summary = finance_summary()
     save_comp_results_and_snapshot(summary)
     history = payment_report_history()
-    pdf_bytes = build_payment_report_pdf(summary, history, today_key())
+    pdf_bytes = build_payment_report_pdf(summary, history, summary.get("comp_date"))
 
     return Response(
         pdf_bytes,

@@ -212,8 +212,20 @@ let saveQueue = Promise.resolve();
 const DESIGN_W = 1200;
 const DESIGN_H = 760;
 
-// Keep this tiny so the bracket fills the fullscreen browser as much as possible.
-const FIT_PADDING = 4;
+// Keep a little left breathing room so the bracket does not sit flush
+// against the viewport edge on width-limited screens. This scales with the
+// screen so TVs/desktops get more balance without wasting mobile space.
+const FIT_PADDING_LEFT_MIN = 20;
+const FIT_PADDING_LEFT_MAX = 56;
+const FIT_PADDING_LEFT_RATIO = 0.032;
+const FIT_PADDING_Y = 8;
+
+function fitPaddingLeft() {
+  return Math.round(Math.min(
+    FIT_PADDING_LEFT_MAX,
+    Math.max(FIT_PADDING_LEFT_MIN, window.innerWidth * FIT_PADDING_LEFT_RATIO)
+  ));
+}
 
 function getBracketContentBounds() {
   const bounds = [];
@@ -260,14 +272,19 @@ function getBracketContentBounds() {
 
 function fitBracketToScreen() {
   const content = getBracketContentBounds();
-  const availableW = Math.max(window.innerWidth - FIT_PADDING * 2, 1);
-  const availableH = Math.max(window.innerHeight - FIT_PADDING * 2, 1);
+  const paddingLeft = fitPaddingLeft();
+  const availableW = Math.max(window.innerWidth - paddingLeft, 1);
+  const availableH = Math.max(window.innerHeight - FIT_PADDING_Y * 2, 1);
 
   // Scale from the actual drawn bracket bounds, not the old 1200x760 design box.
   // This removes the dead space and makes the bracket visibly bigger.
   const scale = Math.min(availableW / content.width, availableH / content.height);
 
-  const left = Math.floor((window.innerWidth - content.width * scale) / 2 - content.left * scale);
+  const left = Math.floor(
+    paddingLeft
+    + (availableW - content.width * scale) / 2
+    - content.left * scale
+  );
   const top = Math.floor((window.innerHeight - content.height * scale) / 2 - content.top * scale);
 
   bracket.style.transform = `translate(${left}px, ${top}px) scale(${scale})`;

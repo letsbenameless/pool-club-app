@@ -129,7 +129,8 @@
       font-weight: bold;
     }
 
-    input[type="number"] {
+    input[type="number"],
+    input[type="date"] {
       box-sizing: border-box;
       width: 100%;
       border: 1px solid #555;
@@ -342,6 +343,10 @@
       <section class="panel">
         <h2>Settings</h2>
         <div class="settings">
+          <label>
+            Competition date
+            <input type="date" name="comp_date" value="{{ summary.comp_date }}">
+          </label>
           <label>
             Payout type
             <span class="mode-row">
