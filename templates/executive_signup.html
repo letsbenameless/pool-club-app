@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Request Executive Account</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+
+    main {
+      box-sizing: border-box;
+      width: min(100% - 24px, 430px);
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 18px;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: 22px;
+    }
+
+    form,
+    label {
+      display: grid;
+      gap: 10px;
+    }
+
+    label {
+      color: #ddd;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    input,
+    select {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #050505;
+      color: #f5f5f5;
+      padding: 10px 11px;
+      font-size: 16px;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: #7CFF7C;
+      outline: none;
+    }
+
+    button,
+    a {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #eeeeee;
+      color: #111;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .message {
+      margin: 0 0 12px;
+      border: 1px solid #ff9f9f;
+      border-radius: 6px;
+      background: #101010;
+      color: #ffd8d8;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: bold;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Request Executive Account</h1>
+
+    {% if error %}
+      <p class="message">{{ error }}</p>
+    {% endif %}
+
+    <form method="POST" autocomplete="off">
+      <label>
+        Email
+        <input name="email" type="email" autocomplete="username" required autofocus>
+      </label>
+
+      <label>
+        Known player
+        <input name="player_name" list="known-player-options" autocomplete="off" required>
+      </label>
+
+      <label>
+        Requested role
+        <select name="executive_role">
+          {% for role in executive_roles %}
+            <option value="{{ role }}">{{ role }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        Password
+        <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+      </label>
+
+      <datalist id="known-player-options">
+        {% for name in known_player_names %}
+          <option value="{{ name }}"></option>
+        {% endfor %}
+      </datalist>
+
+      <div class="actions">
+        <button type="submit">Send Request</button>
+        <a class="secondary" href="{{ url_for('executive_login') }}">Log In</a>
+      </div>
+    </form>
+  </main>
+</body>
+</html>

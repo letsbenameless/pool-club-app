@@ -22,6 +22,7 @@
       padding: 14px 18px;
       background: #171717;
       border-bottom: 1px solid #333;
+      margin-left: 220px;
     }
 
     h1 {
@@ -47,18 +48,70 @@
       cursor: pointer;
     }
 
-    a.secondary {
+    a.secondary,
+    button.secondary {
       background: #222;
       color: #f5f5f5;
     }
 
-    a.download {
+    a.download,
+    button.download {
       background: #7CFF7C;
       color: #111;
     }
 
     main {
       padding: 18px;
+      margin-left: 220px;
+    }
+
+    .executive-sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 30;
+      box-sizing: border-box;
+      width: 220px;
+      border-right: 1px solid #333;
+      background: #151515;
+      padding: 16px 12px;
+    }
+
+    .sidebar-title {
+      margin: 0 0 14px;
+      color: #aaa;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .executive-sidebar nav {
+      display: grid;
+      gap: 7px;
+    }
+
+    .executive-sidebar a,
+    .executive-sidebar button {
+      box-sizing: border-box;
+      width: 100%;
+      border-color: #444;
+      background: #222;
+      color: #f5f5f5;
+      text-align: left;
+    }
+
+    .executive-sidebar a.active {
+      border-color: #7CFF7C;
+      background: #dfffdc;
+      color: #111;
+    }
+
+    .executive-sidebar form {
+      margin: 16px 0 0;
+    }
+
+    .sidebar-edge-handle,
+    .sidebar-overlay {
+      display: none;
     }
 
     .nav-actions {
@@ -66,6 +119,10 @@
       flex-wrap: wrap;
       gap: 8px;
       justify-content: flex-end;
+    }
+
+    .logout-form {
+      margin: 0;
     }
 
     .week-badge {
@@ -150,6 +207,18 @@
       color: #f5f5f5;
       padding: 9px 10px;
       font-size: 16px;
+    }
+
+    .report-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: end;
+      margin: 0 0 16px;
+    }
+
+    .report-controls label {
+      min-width: min(100%, 280px);
     }
 
     .mode-row,
@@ -279,6 +348,52 @@
         position: static;
         align-items: flex-start;
         flex-direction: column;
+        margin-left: 0;
+      }
+
+      .executive-sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: min(82vw, 280px);
+        border-right: 1px solid #333;
+        border-bottom: 0;
+        transform: translateX(-100%);
+        transition: transform 180ms ease;
+        box-shadow: 10px 0 26px rgba(0, 0, 0, 0.35);
+      }
+
+      body.sidebar-open .executive-sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-edge-handle {
+        position: fixed;
+        left: 0;
+        top: 78px;
+        z-index: 25;
+        display: block;
+        width: 30px;
+        min-height: 86px;
+        border-radius: 0 6px 6px 0;
+        border-left: 0;
+        padding: 7px 4px;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        background: #7CFF7C;
+        color: #111;
+        font-size: 12px;
+      }
+
+      .sidebar-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      body.sidebar-open .sidebar-overlay {
+        display: block;
       }
 
       .nav-actions {
@@ -290,31 +405,42 @@
         transform: none;
       }
 
-      .nav-actions a {
+      .nav-actions a,
+      .nav-actions button {
         flex: 1 1 auto;
         text-align: center;
       }
 
       main {
+        margin-left: 0;
         padding: 12px;
       }
     }
   </style>
 </head>
 <body>
+  {% include "_executive_sidebar.html" %}
   <header>
     <h1>Payments</h1>
     <div class="week-badge">{{ competition.display }}</div>
     <div class="nav-actions">
-      <a class="secondary" href="{{ url_for('register') }}">Register Players</a>
-      <a class="secondary" href="{{ url_for('executive_games') }}">Executive Games</a>
-      <a class="secondary" href="{{ url_for('bracket_settings') }}">Bracket Settings</a>
       <a href="{{ url_for('bracket') }}">Bracket Display</a>
-      <a class="download" href="{{ url_for('payments_pdf') }}">Download PDF</a>
     </div>
   </header>
 
   <main>
+    <div class="report-controls">
+      <label>
+        Weekly report
+        <select id="report-week-select" name="report_comp_date" form="payments-form">
+          {% for option in report_week_options %}
+            <option value="{{ option.date }}" {% if option.date == summary.comp_date %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <a class="download" id="download-weekly-report" href="{{ url_for('payments_pdf', comp_date=summary.comp_date) }}">Download Weekly Report</a>
+    </div>
+
     <form method="POST" id="payments-form">
       <div class="summary">
         <div class="metric">
@@ -345,8 +471,12 @@
         <h2>Settings</h2>
         <div class="settings">
           <label>
-            Competition date
-            <input type="date" name="comp_date" value="{{ summary.comp_date }}">
+            Competition week
+            <select name="comp_date" id="payment-week-select">
+              {% for option in report_week_options %}
+                <option value="{{ option.date }}" {% if option.date == summary.comp_date %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
           </label>
           <label>
             Payout type
@@ -534,6 +664,10 @@
     const profitLoss = document.querySelector("[data-profit-loss]");
     const presetButtons = Array.from(document.querySelectorAll("[data-preset-size]"));
     const compSizeSelect = document.querySelector("[data-comp-size]");
+    const paymentWeekSelect = document.getElementById("payment-week-select");
+    const reportWeekSelect = document.getElementById("report-week-select");
+    const reportDownloadLink = document.getElementById("download-weekly-report");
+    const reportPdfUrl = {{ url_for('payments_pdf') | tojson }};
     let saveTimer = null;
     let saveInFlight = false;
     let saveAgain = false;
@@ -598,6 +732,13 @@
       profitLoss.classList.toggle("negative", profitValue < 0);
       profitLoss.classList.toggle("positive", profitValue >= 0);
       updatePresetButtons();
+    }
+
+    function updateReportLink() {
+      const reportDate = reportWeekSelect?.value || paymentWeekSelect?.value || "";
+      if (!reportDownloadLink || !reportDate) return;
+
+      reportDownloadLink.href = `${reportPdfUrl}?comp_date=${encodeURIComponent(reportDate)}`;
     }
 
     function updateSummaryFromServer(summary) {
@@ -682,6 +823,19 @@
     }
 
     paymentsForm?.addEventListener("change", scheduleSave);
+    paymentWeekSelect?.addEventListener("change", () => {
+      if (reportWeekSelect) {
+        reportWeekSelect.value = paymentWeekSelect.value;
+      }
+      updateReportLink();
+    });
+    reportWeekSelect?.addEventListener("change", () => {
+      if (paymentWeekSelect) {
+        paymentWeekSelect.value = reportWeekSelect.value;
+      }
+      updateReportLink();
+      scheduleSave();
+    });
     paymentsForm?.addEventListener("input", (event) => {
       if (["first_winnings", "second_winnings", "third_winnings"].includes(event.target.name)) {
         paymentsForm.querySelector("input[name='payout_mode'][value='custom']").checked = true;
@@ -704,6 +858,7 @@
       savePayments();
     });
     updatePresetButtons();
+    updateReportLink();
   </script>
 </body>
 </html>

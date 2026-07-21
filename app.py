@@ -1,4 +1,4 @@
-from flask import Flask, Response, render_template, request, redirect, url_for
+from flask import Flask, Response, render_template, request, redirect, session, url_for
 from memberlist import members as default_members
 from payment_report import (
     build_payment_report_pdf,
@@ -9,18 +9,24 @@ from payment_report import (
 )
 
 import datetime as dt
+import smtplib
 import json
 import os
 import random
 import re
+import secrets
 import sqlite3
 from contextlib import closing
+from email.message import EmailMessage
+from functools import wraps
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "pool_comp.sqlite3")
+SECRET_KEY_FILE = os.path.join(BASE_DIR, ".flask_secret_key")
 OLD_STATE_FILE = os.path.join(BASE_DIR, "bracket_state.json")
 MEMBERS_FILE = os.path.join(BASE_DIR, "members.json")
 KNOWN_PLAYERS_FILE = os.path.join(BASE_DIR, "known_players.json")
@@ -67,6 +73,14 @@ PRESET_WINNINGS = {
     64: {1: 60.0, 2: 45.0, 3: 30.0},
 }
 PAYOUT_PLACES = (1, 2, 3)
+EXECUTIVE_ROLES = (
+    "Executive",
+    "President",
+    "Vice President",
+    "Treasurer",
+    "Secretary",
+    "Social Media Manager",
+)
 DEFAULT_BRACKET_SETTINGS = {
     "highlight_color": "#FF7900",
     "remove_hover_color": "#ff7c7c",
@@ -86,6 +100,33 @@ CSS_COLOR_RE = re.compile(
 )
 
 
+def load_secret_key():
+    configured_key = os.environ.get("POOL_APP_SECRET_KEY")
+
+    if configured_key:
+        return configured_key
+
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, "r", encoding="utf-8") as f:
+            key = f.read().strip()
+            if key:
+                return key
+
+    key = secrets.token_urlsafe(48)
+
+    with open(SECRET_KEY_FILE, "w", encoding="utf-8") as f:
+        f.write(key)
+
+    return key
+
+
+app.secret_key = load_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
+
 def competition_context_for_date(date_key=None):
     comp_date = clean_date(date_key or most_recent_tuesday_key())
     return {
@@ -100,7 +141,10 @@ def competition_context_for_date(date_key=None):
 @app.context_processor
 def inject_competition_context():
     return {
-        "competition": competition_context_for_date()
+        "competition": competition_context_for_date(),
+        "executive_username": session.get("executive_username", ""),
+        "executive_player_name": session.get("executive_player_name", ""),
+        "executive_role": session.get("executive_role", EXECUTIVE_ROLES[0]),
     }
 
 
@@ -119,6 +163,8 @@ def init_db():
         ensure_registration_state_schema(conn)
         ensure_finance_state_schema(conn)
         ensure_bracket_settings_schema(conn)
+        ensure_executive_users_schema(conn)
+        ensure_executive_requests_schema(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS players (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,6 +218,594 @@ def init_db():
             FROM match_results
         """)
         conn.commit()
+
+
+def ensure_executive_users_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS executive_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            player_name TEXT NOT NULL DEFAULT '',
+            executive_role TEXT NOT NULL DEFAULT 'Executive',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_login_at TEXT
+        )
+    """)
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(executive_users)").fetchall()
+    }
+
+    if "player_name" not in columns:
+        conn.execute("ALTER TABLE executive_users ADD COLUMN player_name TEXT NOT NULL DEFAULT ''")
+
+    if "executive_role" not in columns:
+        conn.execute("ALTER TABLE executive_users ADD COLUMN executive_role TEXT NOT NULL DEFAULT 'Executive'")
+
+    migrate_known_executive_usernames(conn)
+
+
+def migrate_known_executive_usernames(conn):
+    conn.execute(
+        """
+        UPDATE executive_users
+        SET username = ?
+        WHERE username = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM executive_users existing
+              WHERE existing.username = ?
+          )
+        """,
+        ("rockateeer12@gmail.com", "bludclawg", "rockateeer12@gmail.com")
+    )
+
+
+def ensure_executive_requests_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS executive_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            player_name TEXT NOT NULL,
+            executive_role TEXT NOT NULL DEFAULT 'Executive',
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TEXT,
+            resolved_by_username TEXT NOT NULL DEFAULT ''
+        )
+    """)
+
+
+def clean_username(username):
+    return str(username or "").strip().casefold()
+
+
+def clean_email(value):
+    email = clean_username(value)
+
+    if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        return ""
+
+    return email
+
+
+def clean_executive_role(role):
+    clean = str(role or "").strip()
+    return clean if clean in EXECUTIVE_ROLES else EXECUTIVE_ROLES[0]
+
+
+def executive_user_count():
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        row = conn.execute("SELECT COUNT(*) AS count FROM executive_users").fetchone()
+        return int(row["count"] or 0)
+
+
+def get_executive_user(username):
+    clean = clean_username(username)
+
+    if not clean:
+        return None
+
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        return conn.execute(
+            """
+            SELECT id, username, password_hash, player_name, executive_role
+            FROM executive_users
+            WHERE username = ?
+            """,
+            (clean,)
+        ).fetchone()
+
+
+def get_executive_user_by_id(user_id):
+    try:
+        clean_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        return conn.execute(
+            """
+            SELECT id, username, password_hash, player_name, executive_role
+            FROM executive_users
+            WHERE id = ?
+            """,
+            (clean_id,)
+        ).fetchone()
+
+
+def create_executive_user(username, password, player_name="", role=None):
+    clean = clean_email(username)
+
+    if not clean:
+        return False, "Enter a valid email address."
+
+    if len(clean) > 80:
+        return False, "Use a username under 80 characters."
+
+    if len(password or "") < 8:
+        return False, "Use a password with at least 8 characters."
+
+    canonical_player_name = canonical_known_player_name(player_name)
+
+    if player_name and not canonical_player_name:
+        return False, "Choose a known player from the list."
+
+    clean_role = clean_executive_role(role)
+
+    try:
+        with closing(get_db()) as conn:
+            ensure_executive_users_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO executive_users (
+                    username, password_hash, player_name, executive_role
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    clean,
+                    generate_password_hash(password),
+                    canonical_player_name,
+                    clean_role,
+                )
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        return False, "That username already exists."
+
+    return True, clean
+
+
+def pending_executive_request_for_email(email):
+    clean = clean_email(email)
+
+    if not clean:
+        return None
+
+    with closing(get_db()) as conn:
+        ensure_executive_requests_schema(conn)
+        return conn.execute(
+            """
+            SELECT *
+            FROM executive_requests
+            WHERE email = ?
+              AND status = 'pending'
+            ORDER BY requested_at DESC
+            LIMIT 1
+            """,
+            (clean,)
+        ).fetchone()
+
+
+def pending_executive_requests():
+    with closing(get_db()) as conn:
+        ensure_executive_requests_schema(conn)
+        return conn.execute(
+            """
+            SELECT *
+            FROM executive_requests
+            WHERE status = 'pending'
+            ORDER BY requested_at ASC
+            """
+        ).fetchall()
+
+
+def create_executive_request(email, password, player_name, role):
+    clean = clean_email(email)
+
+    if not clean:
+        return False, "Enter a valid email address."
+
+    if len(password or "") < 8:
+        return False, "Use a password with at least 8 characters."
+
+    canonical_player_name = canonical_known_player_name(player_name)
+
+    if not canonical_player_name:
+        return False, "Choose your known player name from the list."
+
+    clean_role = clean_executive_role(role)
+
+    if get_executive_user(clean):
+        return False, "An executive account already exists for that email."
+
+    if pending_executive_request_for_email(clean):
+        return False, "There is already a pending request for that email."
+
+    with closing(get_db()) as conn:
+        ensure_executive_requests_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO executive_requests (
+                email, password_hash, player_name, executive_role
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                clean,
+                generate_password_hash(password),
+                canonical_player_name,
+                clean_role,
+            )
+        )
+        conn.commit()
+
+    request_info = {
+        "email": clean,
+        "player_name": canonical_player_name,
+        "role": clean_role,
+    }
+    send_executive_request_emails(request_info)
+    return True, request_info
+
+
+def resolve_executive_request(request_id, action, resolver_username):
+    try:
+        clean_request_id = int(request_id)
+    except (TypeError, ValueError):
+        return False, "Request was not found."
+
+    if action not in {"approve", "deny"}:
+        return False, "Choose approve or deny."
+
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        ensure_executive_requests_schema(conn)
+        request_row = conn.execute(
+            """
+            SELECT *
+            FROM executive_requests
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (clean_request_id,)
+        ).fetchone()
+
+        if not request_row:
+            return False, "Request was not found."
+
+        if action == "approve":
+            if conn.execute(
+                "SELECT 1 FROM executive_users WHERE username = ?",
+                (request_row["email"],)
+            ).fetchone():
+                return False, "An account already exists for that email."
+
+            conn.execute(
+                """
+                INSERT INTO executive_users (
+                    username, password_hash, player_name, executive_role
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    request_row["email"],
+                    request_row["password_hash"],
+                    request_row["player_name"],
+                    clean_executive_role(request_row["executive_role"]),
+                )
+            )
+
+        status = "approved" if action == "approve" else "denied"
+        conn.execute(
+            """
+            UPDATE executive_requests
+            SET status = ?,
+                resolved_at = CURRENT_TIMESTAMP,
+                resolved_by_username = ?
+            WHERE id = ?
+            """,
+            (status, resolver_username or "", clean_request_id)
+        )
+        conn.commit()
+
+    request_info = {
+        "email": request_row["email"],
+        "player_name": request_row["player_name"],
+        "role": clean_executive_role(request_row["executive_role"]),
+    }
+    send_executive_resolution_email(request_info, status)
+    return True, status
+
+
+def executive_email_recipients():
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT username
+            FROM executive_users
+            ORDER BY username COLLATE NOCASE
+            """
+        ).fetchall()
+
+    return [
+        row["username"]
+        for row in rows
+        if clean_email(row["username"])
+    ]
+
+
+def send_email(to_addresses, subject, body):
+    recipients = [
+        clean_email(address)
+        for address in to_addresses
+        if clean_email(address)
+    ]
+
+    if not recipients:
+        return False
+
+    smtp_host = os.environ.get("POOL_APP_SMTP_HOST", "").strip()
+    smtp_port = int(os.environ.get("POOL_APP_SMTP_PORT", "587") or 587)
+    smtp_user = os.environ.get("POOL_APP_SMTP_USER", "").strip()
+    smtp_password = os.environ.get("POOL_APP_SMTP_PASSWORD", "")
+    from_address = clean_email(
+        os.environ.get("POOL_APP_EMAIL_FROM", "").strip()
+        or smtp_user
+        or "pool-app@example.local"
+    )
+
+    if not smtp_host:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_address
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
+            if os.environ.get("POOL_APP_SMTP_TLS", "1") != "0":
+                smtp.starttls()
+            if smtp_user:
+                smtp.login(smtp_user, smtp_password)
+            smtp.send_message(message)
+    except Exception:
+        return False
+
+    return True
+
+
+def executive_request_email_body(request_info, prefix):
+    return (
+        f"{prefix}\n\n"
+        f"Email: {request_info['email']}\n"
+        f"Name: {request_info['player_name']}\n"
+        f"Requested role: {request_info['role']}\n"
+    )
+
+
+def send_executive_request_emails(request_info):
+    body = executive_request_email_body(
+        request_info,
+        "A new executive account request has been submitted."
+    )
+    send_email(
+        executive_email_recipients(),
+        "New executive account request",
+        body,
+    )
+    send_email(
+        [request_info["email"]],
+        "Executive account request received",
+        executive_request_email_body(
+            request_info,
+            "Your executive account request has been received and is waiting for approval."
+        ),
+    )
+
+
+def send_executive_resolution_email(request_info, status):
+    if status == "approved":
+        prefix = "Your executive account request has been approved. You can now log in."
+        subject = "Executive account approved"
+    else:
+        prefix = "Your executive account request has been denied."
+        subject = "Executive account request denied"
+
+    send_email(
+        [request_info["email"]],
+        subject,
+        executive_request_email_body(request_info, prefix),
+    )
+
+
+def mark_executive_login(user_id):
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            UPDATE executive_users
+            SET last_login_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (user_id,)
+        )
+        conn.commit()
+
+
+def login_executive(user):
+    session.clear()
+    session["executive_user_id"] = int(user["id"])
+    session["executive_username"] = user["username"]
+    session["executive_player_name"] = user["player_name"] or ""
+    session["executive_role"] = clean_executive_role(user["executive_role"])
+    mark_executive_login(user["id"])
+
+
+def is_executive_logged_in():
+    return bool(session.get("executive_user_id"))
+
+
+def current_executive_user():
+    return get_executive_user_by_id(session.get("executive_user_id"))
+
+
+def executive_profiles():
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT username, player_name, executive_role
+            FROM executive_users
+            WHERE player_name != ''
+            ORDER BY player_name COLLATE NOCASE, username COLLATE NOCASE
+            """
+        ).fetchall()
+
+    return [
+        {
+            "username": row["username"],
+            "player_name": row["player_name"],
+            "role": clean_executive_role(row["executive_role"]),
+        }
+        for row in rows
+    ]
+
+
+def executive_profiles_by_player():
+    profiles = {}
+
+    for profile in executive_profiles():
+        profiles.setdefault(profile["player_name"].casefold(), []).append(profile)
+
+    return profiles
+
+
+def update_current_executive_profile(player_name, role):
+    user_id = session.get("executive_user_id")
+
+    if not user_id:
+        return False, "Executive login required"
+
+    canonical_player_name = canonical_known_player_name(player_name)
+
+    if player_name and not canonical_player_name:
+        return False, "Choose a known player from the list."
+
+    clean_role = clean_executive_role(role)
+
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        conn.execute(
+            """
+            UPDATE executive_users
+            SET player_name = ?,
+                executive_role = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (canonical_player_name, clean_role, int(user_id))
+        )
+        conn.commit()
+
+    session["executive_role"] = clean_role
+    session["executive_player_name"] = canonical_player_name
+    return True, {
+        "player_name": canonical_player_name,
+        "role": clean_role,
+    }
+
+
+def executive_login_required(route):
+    @wraps(route)
+    def wrapped(*args, **kwargs):
+        if is_executive_logged_in():
+            return route(*args, **kwargs)
+
+        if request.method != "GET":
+            if wants_json_response() or request.is_json:
+                return {"success": False, "error": "Executive login required"}, 401
+
+        return redirect(url_for("executive_login", next=request.full_path))
+
+    return wrapped
+
+
+def clean_next_url(next_url):
+    candidate = str(next_url or "").strip()
+
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return url_for("executive_games")
+
+    return candidate
+
+
+def quote_sqlite_identifier(identifier):
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+def database_diagnostics(table_name=None):
+    with closing(get_db()) as conn:
+        table_names = [
+            row["name"]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type IN ('table', 'view')
+                  AND name NOT LIKE 'sqlite_%'
+                ORDER BY name COLLATE NOCASE
+                """
+            ).fetchall()
+        ]
+        tables = []
+
+        for name in table_names:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS row_count FROM {quote_sqlite_identifier(name)}"
+            ).fetchone()
+            tables.append({"name": name, "row_count": int(row["row_count"] or 0)})
+
+        selected_table = table_name if table_name in table_names else (table_names[0] if table_names else "")
+        schema = []
+        columns = []
+        rows = []
+
+        if selected_table:
+            quoted = quote_sqlite_identifier(selected_table)
+            schema = [dict(row) for row in conn.execute(f"PRAGMA table_info({quoted})").fetchall()]
+            columns = [column["name"] for column in schema]
+            rows = [
+                {
+                    column: "NULL" if row[column] is None else str(row[column])
+                    for column in columns
+                }
+                for row in conn.execute(f"SELECT * FROM {quoted}").fetchall()
+            ]
+
+    return {
+        "tables": tables,
+        "selected_table": selected_table,
+        "schema": schema,
+        "columns": columns,
+        "rows": rows,
+    }
 
 
 def clean_css_color(value, fallback):
@@ -611,6 +1245,21 @@ def load_known_player_names():
     return sort_names(unique_names(known_names))
 
 
+def canonical_known_player_name(value):
+    clean = clean_known_player_name(value)
+
+    if not clean:
+        return ""
+
+    clean_key = clean.casefold()
+
+    for name in load_known_player_names():
+        if name.casefold() == clean_key:
+            return name
+
+    return ""
+
+
 def save_known_player_names(names):
     clean_names = sort_names(unique_names(names))
 
@@ -627,11 +1276,13 @@ def add_known_players(names):
 
 def get_known_players():
     member_keys = {name.casefold() for name in load_members()}
+    executive_map = executive_profiles_by_player()
 
     return [
         {
             "name": name,
-            "is_member": name.casefold() in member_keys
+            "is_member": name.casefold() in member_keys,
+            "executives": executive_map.get(name.casefold(), []),
         }
         for name in load_known_player_names()
     ]
@@ -829,6 +1480,29 @@ def most_recent_tuesday_key(date_key=None):
 
     days_since_tuesday = (current_date.weekday() - 1) % 7
     return (current_date - dt.timedelta(days=days_since_tuesday)).isoformat()
+
+
+def tuesday_week_options(selected_date_key=None, weeks_back=18, weeks_forward=6):
+    anchor = dt.date.fromisoformat(most_recent_tuesday_key())
+    selected_key = clean_date_key(selected_date_key)
+    options = []
+
+    for offset in range(-weeks_back, weeks_forward + 1):
+        comp_date = anchor + dt.timedelta(days=offset * 7)
+        context = competition_context_for_date(comp_date.isoformat())
+        options.append({
+            "date": context["date"],
+            "label": f"{context['date_label']} ({context['week_label']})",
+        })
+
+    if selected_key not in {option["date"] for option in options}:
+        context = competition_context_for_date(selected_key)
+        options.append({
+            "date": context["date"],
+            "label": f"{context['date_label']} ({context['week_label']})",
+        })
+
+    return sorted(options, key=lambda option: option["date"], reverse=True)
 
 
 def semester_key_for_date(date_key=None):
@@ -3132,6 +3806,7 @@ def bracket():
     else:
         state = normalize_state(state)
 
+    normalize_active_tables(state)
     state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
 
     return render_template(
@@ -3141,7 +3816,126 @@ def bracket():
     )
 
 
+@app.route("/executive_login", methods=["GET", "POST"])
+def executive_login():
+    has_executive_users = executive_user_count() > 0
+    next_url = clean_next_url(request.args.get("next") or request.form.get("next"))
+    error = ""
+    message = request.args.get("message", "")
+
+    if request.method == "POST":
+        username = clean_username(request.form.get("username"))
+        password = request.form.get("password", "")
+
+        if has_executive_users:
+            user = get_executive_user(username)
+
+            if user and check_password_hash(user["password_hash"], password):
+                login_executive(user)
+                return redirect(next_url)
+
+            error = "Username or password is incorrect."
+        else:
+            success, result = create_executive_user(
+                username,
+                password,
+                request.form.get("player_name", ""),
+                request.form.get("executive_role", EXECUTIVE_ROLES[0])
+            )
+
+            if success:
+                user = get_executive_user(result)
+                login_executive(user)
+                return redirect(next_url)
+
+            error = result
+
+    return render_template(
+        "executive_login.html",
+        setup_required=not has_executive_users,
+        error=error,
+        message=message,
+        next_url=next_url,
+        known_player_names=load_known_player_names(),
+        executive_roles=EXECUTIVE_ROLES,
+    )
+
+
+@app.route("/executive_logout", methods=["POST"])
+def executive_logout():
+    session.clear()
+    return redirect(url_for("executive_login"))
+
+
+@app.route("/executive_signup", methods=["GET", "POST"])
+def executive_signup():
+    if executive_user_count() == 0:
+        return redirect(url_for("executive_login", next=request.args.get("next") or url_for("executive_games")))
+
+    error = ""
+
+    if request.method == "POST":
+        success, result = create_executive_request(
+            request.form.get("email", ""),
+            request.form.get("password", ""),
+            request.form.get("player_name", ""),
+            request.form.get("executive_role", EXECUTIVE_ROLES[0])
+        )
+
+        if success:
+            return redirect(url_for(
+                "executive_login",
+                message="Your request has been sent to the current executives."
+            ))
+
+        error = result
+
+    return render_template(
+        "executive_signup.html",
+        error=error,
+        known_player_names=load_known_player_names(),
+        executive_roles=EXECUTIVE_ROLES,
+    )
+
+
+@app.route("/executive_requests", methods=["GET", "POST"])
+@executive_login_required
+def executive_requests_route():
+    message = ""
+    error = ""
+
+    if request.method == "POST":
+        success, result = resolve_executive_request(
+            request.form.get("request_id"),
+            request.form.get("action"),
+            session.get("executive_username", "")
+        )
+
+        if success:
+            message = f"Request {result}."
+        else:
+            error = result
+
+    return render_template(
+        "executive_requests.html",
+        requests=pending_executive_requests(),
+        message=message,
+        error=error,
+    )
+
+
+@app.route("/database")
+@app.route("/database/<table_name>")
+@executive_login_required
+def database_browser(table_name=None):
+    return render_template(
+        "database.html",
+        **database_diagnostics(table_name),
+    )
+
+
 @app.route("/bracket_settings", methods=["GET", "POST"])
+@executive_login_required
 def bracket_settings():
     if request.method == "POST":
         if request.form.get("action") == "reset":
@@ -3162,18 +3956,21 @@ def bracket_settings():
         settings=load_bracket_settings(),
         defaults=DEFAULT_BRACKET_SETTINGS,
         presets=BRACKET_COLOR_PRESETS,
+        executive_profiles=executive_profiles(),
     )
 
 
 @app.route("/bracket_state")
 def bracket_state_route():
     state = normalize_state(load_state() or empty_state())
+    normalize_active_tables(state)
     state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
     state["bracket_settings_version"] = load_bracket_settings().get("_version", 0)
     return state
 
 
 @app.route("/executive_games")
+@executive_login_required
 def executive_games():
     state = normalize_state(load_state() or empty_state())
     game_filter = request.args.get("filter", "all")
@@ -3200,10 +3997,12 @@ def executive_games():
             "visible": len(games),
         },
         bracket_version=state.get("_version", 0),
+        executive_profiles=executive_profiles(),
     )
 
 
 @app.route("/game_action", methods=["POST"])
+@executive_login_required
 def game_action_route():
     action = request.form.get("action", "")
     match_id = request.form.get("match_id", "")
@@ -3251,6 +4050,9 @@ def game_action_route():
 
 @app.route("/registration_state", methods=["GET", "POST"])
 def registration_state_route():
+    if request.method == "POST" and not is_executive_logged_in():
+        return {"success": False, "error": "Executive login required"}, 401
+
     if request.method == "POST":
         incoming = request.get_json(silent=True) or {}
         registration_client_id = clean_registration_client_id(
@@ -3289,6 +4091,7 @@ def registration_state_route():
 
 
 @app.route("/payments", methods=["GET", "POST"])
+@executive_login_required
 def payments():
     if request.method == "POST":
         active_players = active_comp_players()
@@ -3340,18 +4143,27 @@ def payments():
 
         return redirect(url_for("payments"))
 
+    summary = finance_summary()
     return render_template(
         "payments.html",
-        summary=finance_summary()
+        summary=summary,
+        report_week_options=tuesday_week_options(summary.get("comp_date")),
     )
 
 
 @app.route("/payments/export.pdf")
+@executive_login_required
 def payments_pdf():
     summary = finance_summary()
+    report_date = clean_date_key(request.args.get("comp_date") or summary.get("comp_date"))
+    summary = {
+        **summary,
+        "comp_date": report_date,
+        "comp_date_display": competition_context_for_date(report_date)["display"],
+    }
     save_comp_results_and_snapshot(summary)
     history = payment_report_history()
-    pdf_bytes = build_payment_report_pdf(summary, history, summary.get("comp_date"))
+    pdf_bytes = build_payment_report_pdf(summary, history, report_date)
 
     return Response(
         pdf_bytes,
@@ -3364,6 +4176,9 @@ def payments_pdf():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    if request.method == "POST" and not is_executive_logged_in():
+        return redirect(url_for("executive_login", next=url_for("register")))
+
     if request.method == "POST":
         action = request.form.get("action")
         registration_client_id = clean_registration_client_id(
@@ -3510,6 +4325,7 @@ def register():
 
 
 @app.route("/members", methods=["GET", "POST"])
+@executive_login_required
 def edit_members():
     if request.method == "POST":
         edited_members = parse_textarea(request.form.get("members", ""))
@@ -3534,6 +4350,7 @@ def edit_members():
 
 
 @app.route("/remove_first_round_player", methods=["POST"])
+@executive_login_required
 def remove_first_round_player_route():
     incoming = request.get_json() or {}
     slot_id = incoming.get("slot_id", "")
@@ -3555,6 +4372,7 @@ def remove_first_round_player_route():
 
 
 @app.route("/record_match_result", methods=["POST"])
+@executive_login_required
 def record_match_result_route():
     incoming = request.get_json() or {}
 
@@ -3581,6 +4399,7 @@ def game_history_route():
 
 
 @app.route("/undo_match_result", methods=["POST"])
+@executive_login_required
 def undo_match_result_route():
     incoming = request.get_json() or {}
 
@@ -3628,6 +4447,7 @@ def undo_match_result_route():
     return {"success": True}
 
 @app.route("/save_bracket", methods=["POST"])
+@executive_login_required
 def save_bracket_route():
     incoming = request.get_json()
 

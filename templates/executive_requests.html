@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Executive Requests</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #171717;
+      border-bottom: 1px solid #333;
+      margin-left: 220px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    a,
+    button {
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #eeeeee;
+      color: #111;
+      padding: 9px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    button.secondary,
+    a.secondary {
+      background: #222;
+      color: #f5f5f5;
+    }
+
+    button.danger {
+      background: #ffdddd;
+      border-color: #ff9f9f;
+    }
+
+    main {
+      padding: 18px;
+      margin-left: 220px;
+    }
+
+    .executive-sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 30;
+      box-sizing: border-box;
+      width: 220px;
+      border-right: 1px solid #333;
+      background: #151515;
+      padding: 16px 12px;
+    }
+
+    .sidebar-title {
+      margin: 0 0 14px;
+      color: #aaa;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .executive-sidebar nav {
+      display: grid;
+      gap: 7px;
+    }
+
+    .executive-sidebar a,
+    .executive-sidebar button {
+      box-sizing: border-box;
+      width: 100%;
+      border-color: #444;
+      background: #222;
+      color: #f5f5f5;
+      text-align: left;
+    }
+
+    .executive-sidebar a.active {
+      border-color: #7CFF7C;
+      background: #dfffdc;
+      color: #111;
+    }
+
+    .executive-sidebar form {
+      margin: 16px 0 0;
+    }
+
+    .sidebar-edge-handle,
+    .sidebar-overlay {
+      display: none;
+    }
+
+    .nav-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .panel {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #181818;
+      padding: 12px;
+    }
+
+    .request-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .request-card {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #101010;
+      padding: 12px;
+    }
+
+    .request-fields {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .field-label {
+      color: #aaa;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .field-value {
+      margin-top: 3px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .message {
+      margin: 0 0 12px;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #101010;
+      color: #ddd;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .error {
+      border-color: #ff9f9f;
+      color: #ffd8d8;
+    }
+
+    .empty {
+      color: #aaa;
+      padding: 8px 0 0;
+    }
+
+    @media (max-width: 700px) {
+      header {
+        position: static;
+        align-items: flex-start;
+        flex-direction: column;
+        margin-left: 0;
+      }
+
+      .executive-sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: min(82vw, 280px);
+        border-right: 1px solid #333;
+        border-bottom: 0;
+        transform: translateX(-100%);
+        transition: transform 180ms ease;
+        box-shadow: 10px 0 26px rgba(0, 0, 0, 0.35);
+      }
+
+      body.sidebar-open .executive-sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-edge-handle {
+        position: fixed;
+        left: 0;
+        top: 78px;
+        z-index: 25;
+        display: block;
+        width: 30px;
+        min-height: 86px;
+        border-radius: 0 6px 6px 0;
+        border-left: 0;
+        padding: 7px 4px;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+        background: #7CFF7C;
+        color: #111;
+        font-size: 12px;
+      }
+
+      .sidebar-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        background: rgba(0, 0, 0, 0.42);
+      }
+
+      body.sidebar-open .sidebar-overlay {
+        display: block;
+      }
+
+      .nav-actions,
+      .nav-actions a {
+        width: 100%;
+        text-align: center;
+      }
+
+      main {
+        margin-left: 0;
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  {% include "_executive_sidebar.html" %}
+  <header>
+    <h1>Requests</h1>
+    <div class="nav-actions">
+      <a href="{{ url_for('bracket') }}">Bracket Display</a>
+    </div>
+  </header>
+
+  <main>
+    {% if message %}<p class="message">{{ message }}</p>{% endif %}
+    {% if error %}<p class="message error">{{ error }}</p>{% endif %}
+
+    <section class="panel">
+      <h2>Pending Executive Requests</h2>
+
+      {% if requests %}
+        <div class="request-list">
+          {% for request_row in requests %}
+            <article class="request-card">
+              <div class="request-fields">
+                <div>
+                  <div class="field-label">Email</div>
+                  <div class="field-value">{{ request_row.email }}</div>
+                </div>
+                <div>
+                  <div class="field-label">Name</div>
+                  <div class="field-value">{{ request_row.player_name }}</div>
+                </div>
+                <div>
+                  <div class="field-label">Requested role</div>
+                  <div class="field-value">{{ request_row.executive_role }}</div>
+                </div>
+                <div>
+                  <div class="field-label">Requested</div>
+                  <div class="field-value">{{ request_row.requested_at }}</div>
+                </div>
+              </div>
+              <div class="actions">
+                <form method="POST">
+                  <input type="hidden" name="request_id" value="{{ request_row.id }}">
+                  <button type="submit" name="action" value="approve">Approve</button>
+                </form>
+                <form method="POST">
+                  <input type="hidden" name="request_id" value="{{ request_row.id }}">
+                  <button class="danger" type="submit" name="action" value="deny">Deny</button>
+                </form>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty">No pending requests.</div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

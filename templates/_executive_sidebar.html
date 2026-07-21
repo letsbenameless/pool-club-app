@@ -1,0 +1,86 @@
+<button class="sidebar-edge-handle" type="button" aria-label="Open navigation" aria-controls="executive-sidebar">Menu</button>
+<div class="sidebar-overlay" data-sidebar-close></div>
+<aside class="executive-sidebar" id="executive-sidebar">
+  <div class="sidebar-title">Executive</div>
+  <nav aria-label="Executive pages">
+    <a class="{% if request.endpoint == 'register' %}active{% endif %}" href="{{ url_for('register') }}">Register Players</a>
+    <a class="{% if request.endpoint == 'executive_games' %}active{% endif %}" href="{{ url_for('executive_games') }}">Comp Management</a>
+    <a class="{% if request.endpoint == 'payments' %}active{% endif %}" href="{{ url_for('payments') }}">Payments</a>
+    <a class="{% if request.endpoint == 'bracket_settings' %}active{% endif %}" href="{{ url_for('bracket_settings') }}">Settings</a>
+    <a class="{% if request.endpoint == 'executive_requests_route' %}active{% endif %}" href="{{ url_for('executive_requests_route') }}">Requests</a>
+    <a class="{% if request.endpoint == 'database_browser' %}active{% endif %}" href="{{ url_for('database_browser') }}">Database</a>
+  </nav>
+  {% if executive_username %}
+    <form method="POST" action="{{ url_for('executive_logout') }}">
+      <button type="submit">Log Out {{ executive_username }}</button>
+    </form>
+  {% else %}
+    <a class="login-link" href="{{ url_for('executive_login', next=request.path) }}">Executive Login</a>
+  {% endif %}
+</aside>
+<script>
+  (() => {
+    const sidebar = document.getElementById("executive-sidebar");
+    const handle = document.querySelector(".sidebar-edge-handle");
+    const overlay = document.querySelector("[data-sidebar-close]");
+    if (!sidebar || !handle || !overlay) return;
+
+    let touchStart = null;
+    const edgeWidth = 32;
+    const minSwipe = 55;
+    const maxVertical = 70;
+
+    function setSidebarOpen(open) {
+      document.body.classList.toggle("sidebar-open", open);
+      handle.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    handle.addEventListener("click", () => {
+      setSidebarOpen(!document.body.classList.contains("sidebar-open"));
+    });
+
+    overlay.addEventListener("click", () => setSidebarOpen(false));
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+      }
+    });
+
+    document.addEventListener("touchstart", event => {
+      const touch = event.changedTouches[0];
+      if (!touch) return;
+
+      touchStart = {
+        x: touch.clientX,
+        y: touch.clientY,
+        startedAtEdge: touch.clientX <= edgeWidth,
+        sidebarWasOpen: document.body.classList.contains("sidebar-open")
+      };
+    }, { passive: true });
+
+    document.addEventListener("touchend", event => {
+      if (!touchStart) return;
+
+      const touch = event.changedTouches[0];
+      if (!touch) {
+        touchStart = null;
+        return;
+      }
+
+      const dx = touch.clientX - touchStart.x;
+      const dy = touch.clientY - touchStart.y;
+      const horizontalEnough = Math.abs(dx) >= minSwipe && Math.abs(dy) <= maxVertical;
+
+      if (horizontalEnough && touchStart.startedAtEdge && dx > 0) {
+        setSidebarOpen(true);
+      }
+
+      if (horizontalEnough && touchStart.sidebarWasOpen && dx < 0) {
+        setSidebarOpen(false);
+      }
+
+      touchStart = null;
+    }, { passive: true });
+  })();
+</script>

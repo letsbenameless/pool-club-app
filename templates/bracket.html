@@ -209,6 +209,7 @@ const bracketData = {{ bracket_data | tojson }};
 const bracketStateUrl = {{ url_for("bracket_state_route") | tojson }};
 const bracketVersion = Number(bracketData._version || 0);
 const bracketSettingsVersion = Number({{ bracket_settings._version | tojson }}) || 0;
+const activeTables = bracketData.active_tables || {};
 console.log("bracketData:", bracketData);
 
 const bracket = document.getElementById("bracket");
@@ -447,23 +448,38 @@ function sendBracketStateBeforeUnload() {
   });
 }
 
-function markActiveMatches() {
-  Object.entries(activeTables).forEach(([topSlotId, tableNumber]) => {
-    const [side, round, slot] = topSlotId.split("-");
-    const bottomSlotId = `${side}-${round}-${Number(slot) + 1}`;
+function renderActiveMatches() {
+  document.querySelectorAll(".active-match").forEach(slot => {
+    slot.classList.remove("active-match");
+  });
+  document.querySelectorAll(".table-badge").forEach(badge => {
+    badge.remove();
+  });
+  activeMatchIds.clear();
 
+  (bracketData.active_matches || []).forEach(matchId => {
+    const [topSlotId, bottomSlotId] = getMatchSlotIds(matchId);
+
+    document.getElementById(topSlotId)?.classList.add("active-match");
+    document.getElementById(bottomSlotId)?.classList.add("active-match");
+
+    activeMatchIds.add(matchId);
+  });
+
+  Object.entries(activeTables).forEach(([matchId, tableNumber]) => {
+    const [topSlotId] = getMatchSlotIds(matchId);
     const top = document.getElementById(topSlotId);
-    const bottom = document.getElementById(bottomSlotId);
+
+    if (!top || !tableNumber) return;
 
     top.classList.add("active-match");
-    bottom.classList.add("active-match");
+    activeMatchIds.add(matchId);
 
     const badge = document.createElement("div");
     badge.className = "table-badge";
     badge.textContent = `T${tableNumber}`;
     top.appendChild(badge);
   });
-  saveBracketState();
 }
 
 function getMatchTopSlotId(slotId) {
@@ -894,14 +910,7 @@ try {
 
   renderRoundRobinScoreboard();
 
-  (bracketData.active_matches || []).forEach(matchId => {
-    const [topSlotId, bottomSlotId] = getMatchSlotIds(matchId);
-
-    document.getElementById(topSlotId)?.classList.add("active-match");
-    document.getElementById(bottomSlotId)?.classList.add("active-match");
-
-    activeMatchIds.add(matchId);
-  });
+  renderActiveMatches();
 
   drawFinalConnector("L-5-0", "left");
   drawFinalConnector("R-5-0", "right");

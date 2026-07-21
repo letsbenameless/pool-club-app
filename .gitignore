@@ -1,5 +1,7 @@
 ﻿pool_comp.sqlite3
 known_players.json
+.flask_secret_key
 __pycache__/
 venv/
 *.pyc
+.venv/
