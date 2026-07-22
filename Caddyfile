@@ -1,5 +1,5 @@
 www.qutpoolapp.online {
-    redir https://qutpoolapp.online{uri}
+    redir https://qutpoolapp.online/register{uri}
 }
 
 qutpoolapp.online {
