@@ -1,4 +1,4 @@
-from flask import Flask, Response, render_template, request, redirect, session, url_for
+from flask import Flask, Response, render_template, request, redirect, session, send_from_directory, url_for
 from memberlist import members as default_members
 from payment_report import (
     build_payment_report_pdf,
@@ -9,6 +9,7 @@ from payment_report import (
 )
 
 import datetime as dt
+import io
 import smtplib
 import json
 import os
@@ -16,6 +17,8 @@ import random
 import re
 import secrets
 import sqlite3
+import qrcode
+import qrcode.image.svg
 from contextlib import closing
 from email.message import EmailMessage
 from functools import wraps
@@ -25,6 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 DB_FILE = os.path.join(BASE_DIR, "pool_comp.sqlite3")
 SECRET_KEY_FILE = os.path.join(BASE_DIR, ".flask_secret_key")
 OLD_STATE_FILE = os.path.join(BASE_DIR, "bracket_state.json")
@@ -86,6 +90,11 @@ DEFAULT_BRACKET_SETTINGS = {
     "remove_hover_color": "#ff7c7c",
     "table_badge_background": "#FF7900",
     "table_badge_text": "#050505",
+    "qr_page_name": "",
+    "qr_link": "",
+    "qr_name_position": "above",
+    "qr_color": "#ffffff",
+    "qr_background_color": "#000000",
 }
 BRACKET_COLOR_PRESETS = [
     {"name": "Orange", "value": "#FF7900"},
@@ -165,6 +174,7 @@ def init_db():
         ensure_bracket_settings_schema(conn)
         ensure_executive_users_schema(conn)
         ensure_executive_requests_schema(conn)
+        ensure_user_accounts_schema(conn)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS players (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -278,6 +288,18 @@ def ensure_executive_requests_schema(conn):
     """)
 
 
+def ensure_user_accounts_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_login_at TEXT
+        )
+    """)
+
+
 def clean_username(username):
     return str(username or "").strip().casefold()
 
@@ -301,6 +323,67 @@ def executive_user_count():
         ensure_executive_users_schema(conn)
         row = conn.execute("SELECT COUNT(*) AS count FROM executive_users").fetchone()
         return int(row["count"] or 0)
+
+
+def get_user_account(email):
+    clean = clean_email(email)
+
+    if not clean:
+        return None
+
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        return conn.execute(
+            """
+            SELECT id, email, password_hash
+            FROM user_accounts
+            WHERE email = ?
+            """,
+            (clean,)
+        ).fetchone()
+
+
+def create_user_account(email, password):
+    clean = clean_email(email)
+
+    if not clean:
+        return False, "Enter a valid email address."
+
+    if len(password or "") < 8:
+        return False, "Use a password with at least 8 characters."
+
+    try:
+        with closing(get_db()) as conn:
+            ensure_user_accounts_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO user_accounts (email, password_hash)
+                VALUES (?, ?)
+                """,
+                (clean, generate_password_hash(password))
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        return False, "A user account already exists for that email."
+
+    return True, clean
+
+
+def login_user_account(user):
+    session.clear()
+    session["user_account_id"] = int(user["id"])
+    session["user_email"] = user["email"]
+
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            UPDATE user_accounts
+            SET last_login_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (int(user["id"]),)
+        )
+        conn.commit()
 
 
 def get_executive_user(username):
@@ -833,6 +916,11 @@ def ensure_bracket_settings_schema(conn):
             remove_hover_color TEXT NOT NULL DEFAULT '#ff7c7c',
             table_badge_background TEXT NOT NULL DEFAULT '#FF7900',
             table_badge_text TEXT NOT NULL DEFAULT '#050505',
+            qr_page_name TEXT NOT NULL DEFAULT '',
+            qr_link TEXT NOT NULL DEFAULT '',
+            qr_name_position TEXT NOT NULL DEFAULT 'above',
+            qr_color TEXT NOT NULL DEFAULT '#ffffff',
+            qr_background_color TEXT NOT NULL DEFAULT '#000000',
             version INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -845,12 +933,25 @@ def ensure_bracket_settings_schema(conn):
     if "version" not in columns:
         conn.execute("ALTER TABLE bracket_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
 
+    qr_columns = {
+        "qr_page_name": "TEXT NOT NULL DEFAULT ''",
+        "qr_link": "TEXT NOT NULL DEFAULT ''",
+        "qr_name_position": "TEXT NOT NULL DEFAULT 'above'",
+        "qr_color": "TEXT NOT NULL DEFAULT '#ffffff'",
+        "qr_background_color": "TEXT NOT NULL DEFAULT '#000000'",
+    }
+    for name, definition in qr_columns.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE bracket_settings ADD COLUMN {name} {definition}")
+
     conn.execute(
         """
         INSERT OR IGNORE INTO bracket_settings (
             id, highlight_color, remove_hover_color,
-            table_badge_background, table_badge_text, version, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            table_badge_background, table_badge_text,
+            qr_page_name, qr_link, qr_name_position, qr_color,
+            qr_background_color, version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
         """,
         (
             BRACKET_SETTINGS_ID,
@@ -858,6 +959,11 @@ def ensure_bracket_settings_schema(conn):
             DEFAULT_BRACKET_SETTINGS["remove_hover_color"],
             DEFAULT_BRACKET_SETTINGS["table_badge_background"],
             DEFAULT_BRACKET_SETTINGS["table_badge_text"],
+            DEFAULT_BRACKET_SETTINGS["qr_page_name"],
+            DEFAULT_BRACKET_SETTINGS["qr_link"],
+            DEFAULT_BRACKET_SETTINGS["qr_name_position"],
+            DEFAULT_BRACKET_SETTINGS["qr_color"],
+            DEFAULT_BRACKET_SETTINGS["qr_background_color"],
         )
     )
 
@@ -1353,7 +1459,9 @@ def load_bracket_settings():
         row = conn.execute(
             """
             SELECT highlight_color, remove_hover_color,
-                   table_badge_background, table_badge_text, version
+                   table_badge_background, table_badge_text,
+                   qr_page_name, qr_link, qr_name_position, qr_color,
+                   qr_background_color, version
             FROM bracket_settings
             WHERE id = ?
             """,
@@ -1364,7 +1472,16 @@ def load_bracket_settings():
 
     if row:
         for key, fallback in DEFAULT_BRACKET_SETTINGS.items():
+            if key.startswith("qr_"):
+                continue
             settings[key] = clean_css_color(row[key], fallback)
+        settings["qr_page_name"] = str(row["qr_page_name"] or "")[:120]
+        settings["qr_link"] = str(row["qr_link"] or "")[:2000]
+        settings["qr_name_position"] = "below" if row["qr_name_position"] == "below" else "above"
+        settings["qr_color"] = clean_css_color(row["qr_color"], DEFAULT_BRACKET_SETTINGS["qr_color"])
+        settings["qr_background_color"] = clean_css_color(
+            row["qr_background_color"], DEFAULT_BRACKET_SETTINGS["qr_background_color"]
+        )
         settings["_version"] = int(row["version"] or 0)
     else:
         settings["_version"] = 0
@@ -1376,7 +1493,15 @@ def save_bracket_settings(form):
     values = {
         key: clean_css_color(form.get(key), fallback)
         for key, fallback in DEFAULT_BRACKET_SETTINGS.items()
+        if not key.startswith("qr_")
     }
+    values["qr_page_name"] = str(form.get("qr_page_name", "")).strip()[:120]
+    values["qr_link"] = str(form.get("qr_link", "")).strip()[:2000]
+    values["qr_name_position"] = "below" if form.get("qr_name_position") == "below" else "above"
+    values["qr_color"] = clean_css_color(form.get("qr_color"), DEFAULT_BRACKET_SETTINGS["qr_color"])
+    values["qr_background_color"] = clean_css_color(
+        form.get("qr_background_color"), DEFAULT_BRACKET_SETTINGS["qr_background_color"]
+    )
 
     with closing(get_db()) as conn:
         ensure_bracket_settings_schema(conn)
@@ -1387,6 +1512,11 @@ def save_bracket_settings(form):
                 remove_hover_color = ?,
                 table_badge_background = ?,
                 table_badge_text = ?,
+                qr_page_name = ?,
+                qr_link = ?,
+                qr_name_position = ?,
+                qr_color = ?,
+                qr_background_color = ?,
                 version = version + 1,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -1396,6 +1526,11 @@ def save_bracket_settings(form):
                 values["remove_hover_color"],
                 values["table_badge_background"],
                 values["table_badge_text"],
+                values["qr_page_name"],
+                values["qr_link"],
+                values["qr_name_position"],
+                values["qr_color"],
+                values["qr_background_color"],
                 BRACKET_SETTINGS_ID,
             )
         )
@@ -3797,8 +3932,48 @@ def delete_first_round_player_in_state(state, match_id, slot_id):
 
 
 @app.route("/")
+def landing():
+    return render_template(
+        "landing.html",
+        message=request.args.get("message", ""),
+        error=request.args.get("error", ""),
+    )
+
+
+@app.route("/assets/<path:filename>")
+def asset_file(filename):
+    return send_from_directory(ASSETS_DIR, filename)
+
+
+@app.route("/bracket_qr.svg")
+def bracket_qr():
+    settings = load_bracket_settings()
+    link = settings.get("qr_link", "")
+    if not link:
+        return Response(status=404)
+
+    qr = qrcode.QRCode(border=2)
+    qr.add_data(link)
+    qr.make(fit=True)
+    image = qr.make_image(
+        image_factory=qrcode.image.svg.SvgPathFillImage,
+    )
+    output = io.BytesIO()
+    image.save(output)
+    qr_color = settings.get("qr_color", DEFAULT_BRACKET_SETTINGS["qr_color"])
+    qr_background_color = settings.get(
+        "qr_background_color", DEFAULT_BRACKET_SETTINGS["qr_background_color"]
+    )
+    svg = output.getvalue().replace(b'fill="#000000"', f'fill="{qr_color}"'.encode("ascii"))
+    svg = svg.replace(b'fill="white"', f'fill="{qr_background_color}"'.encode("ascii"))
+    return Response(svg, mimetype="image/svg+xml")
+
+
+@app.route("/bracket_display")
 def bracket():
     state = load_state()
+    executive_logged_in = bool(session.get("executive_user_id"))
+    user_logged_in = bool(session.get("user_account_id"))
 
     if state is None:
         state = empty_state()
@@ -3812,8 +3987,52 @@ def bracket():
     return render_template(
         "bracket.html",
         bracket_data=state,
-        bracket_settings=load_bracket_settings()
+        bracket_settings=load_bracket_settings(),
+        bracket_user_logged_in=executive_logged_in or user_logged_in,
+        bracket_return_url=url_for("executive_games") if executive_logged_in else url_for("register"),
     )
+
+
+@app.route("/user_login", methods=["POST"])
+def user_login():
+    email = request.form.get("email", "")
+    password = request.form.get("password", "")
+    user = get_user_account(email)
+
+    if user and check_password_hash(user["password_hash"], password):
+        login_user_account(user)
+        return redirect(url_for("register"))
+
+    executive = get_executive_user(email)
+
+    if executive and check_password_hash(executive["password_hash"], password):
+        login_executive(executive)
+        return redirect(url_for("executive_games"))
+
+    return redirect(url_for(
+        "landing",
+        error="Email or password is incorrect."
+    ))
+
+
+@app.route("/user_signup", methods=["GET", "POST"])
+def user_signup():
+    error = ""
+
+    if request.method == "POST":
+        success, result = create_user_account(
+            request.form.get("email", ""),
+            request.form.get("password", "")
+        )
+
+        if success:
+            user = get_user_account(result)
+            login_user_account(user)
+            return redirect(url_for("register"))
+
+        error = result
+
+    return render_template("user_signup.html", error=error)
 
 
 @app.route("/executive_login", methods=["GET", "POST"])
@@ -3864,7 +4083,7 @@ def executive_login():
 @app.route("/executive_logout", methods=["POST"])
 def executive_logout():
     session.clear()
-    return redirect(url_for("executive_login"))
+    return redirect(url_for("landing"))
 
 
 @app.route("/executive_signup", methods=["GET", "POST"])

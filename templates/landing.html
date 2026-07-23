@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Request Executive Account</title>
+  <title>QUT Pool App Login</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
@@ -17,7 +17,7 @@
 
     main {
       box-sizing: border-box;
-      width: min(100% - 24px, 430px);
+      width: min(100% - 24px, 460px);
       border: 1px solid #333;
       border-radius: 6px;
       background: #181818;
@@ -26,11 +26,12 @@
 
     h1 {
       margin: 0 0 14px;
-      font-size: 22px;
+      font-size: 24px;
     }
 
     form,
-    label {
+    label,
+    .actions {
       display: grid;
       gap: 10px;
     }
@@ -41,8 +42,7 @@
       font-weight: bold;
     }
 
-    input,
-    select {
+    input {
       box-sizing: border-box;
       width: 100%;
       border: 1px solid #555;
@@ -53,8 +53,7 @@
       font-size: 16px;
     }
 
-    input:focus,
-    select:focus {
+    input:focus {
       border-color: #7CFF7C;
       outline: none;
     }
@@ -78,23 +77,40 @@
       color: #f5f5f5;
     }
 
-    .actions {
+    .quiet {
+      background: #2a2a2a;
+      border-color: #444;
+      color: #bbb;
+    }
+
+    .split {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
-      margin-top: 4px;
+      margin-top: 10px;
+    }
+
+    .login-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
     }
 
     .message {
       margin: 0 0 12px;
-      border: 1px solid #ff9f9f;
+      border: 1px solid #555;
       border-radius: 6px;
       background: #101010;
-      color: #ffd8d8;
+      color: #ddd;
       padding: 10px 12px;
       font-size: 13px;
       font-weight: bold;
       line-height: 1.35;
+    }
+
+    .error {
+      border-color: #ff9f9f;
+      color: #ffd8d8;
     }
 
     @media (max-width: 520px) {
@@ -114,53 +130,45 @@
         width: 100%;
         margin: 0 auto;
       }
+
+      .split {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>Request Executive Account</h1>
+    <h1>QUT Pool App</h1>
 
     {% if error %}
-      <p class="message">{{ error }}</p>
+      <p class="message error">{{ error }}</p>
+    {% endif %}
+    {% if message %}
+      <p class="message">{{ message }}</p>
     {% endif %}
 
-    <form method="POST" autocomplete="off">
+    <form method="POST" action="{{ url_for('user_login') }}" autocomplete="off">
       <label>
         Email
         <input name="email" type="email" autocomplete="username" required autofocus>
       </label>
 
       <label>
-        Known player
-        <input name="player_name" list="known-player-options" autocomplete="off" required>
-      </label>
-
-      <label>
-        Requested role
-        <select name="executive_role">
-          {% for role in executive_roles %}
-            <option value="{{ role }}">{{ role }}</option>
-          {% endfor %}
-        </select>
-      </label>
-
-      <label>
         Password
-        <input name="password" type="password" autocomplete="new-password" minlength="8" required>
+        <input name="password" type="password" autocomplete="current-password" required>
       </label>
 
-      <datalist id="known-player-options">
-        {% for name in known_player_names %}
-          <option value="{{ name }}"></option>
-        {% endfor %}
-      </datalist>
-
-      <div class="actions">
-        <button type="submit">Send Request</button>
-        <a class="secondary" href="{{ url_for('landing') }}">Back</a>
+      <div class="login-row">
+        <a class="secondary" href="{{ url_for('register') }}">Continue As Guest</a>
+        <button type="submit">Log In</button>
       </div>
     </form>
+
+    <div class="actions" style="margin-top: 12px;">
+      <a class="quiet" href="{{ url_for('user_signup') }}">Create User Account</a>
+      <a class="quiet" href="{{ url_for('executive_signup') }}">Create Executive Account</a>
+    </div>
   </main>
   <script>
     const initialViewportHeight = window.visualViewport?.height || window.innerHeight;
@@ -178,7 +186,7 @@
 
       if (!keyboardVisible) return;
 
-      const activeControl = document.querySelector("input:focus, select:focus");
+      const activeControl = document.querySelector("input:focus");
       activeControl?.scrollIntoView({
         block: "center",
         behavior: "smooth"
@@ -189,12 +197,12 @@
     window.visualViewport?.addEventListener("scroll", updateKeyboardLayout);
     window.addEventListener("resize", updateKeyboardLayout);
 
-    document.querySelectorAll("input, select").forEach(control => {
-      control.addEventListener("focus", () => {
+    document.querySelectorAll("input").forEach(input => {
+      input.addEventListener("focus", () => {
         window.setTimeout(updateKeyboardLayout, 120);
       });
 
-      control.addEventListener("blur", () => {
+      input.addEventListener("blur", () => {
         window.setTimeout(updateKeyboardLayout, 80);
       });
     });

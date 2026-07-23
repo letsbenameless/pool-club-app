@@ -446,8 +446,53 @@
         </label>
       </div>
 
+      <h2 style="margin-top: 22px;">QR code</h2>
+      <div class="hint" style="margin-bottom: 12px;">
+        The QR code appears below the central round-robin box. Leave the link blank to hide it.
+      </div>
+      <div class="settings">
+        <label>
+          Page name
+          <span class="hint">Optional label displayed with the QR code.</span>
+          <input name="qr_page_name" value="{{ settings.qr_page_name }}" maxlength="120">
+        </label>
+
+        <label>
+          Link
+          <span class="hint">The full page address encoded in the QR code.</span>
+          <input name="qr_link" type="url" value="{{ settings.qr_link }}" maxlength="2000" placeholder="https://example.com">
+        </label>
+
+        <label>
+          Page name position
+          <span class="hint">Display the page name above or below the QR code.</span>
+          <select name="qr_name_position">
+            <option value="above" {% if settings.qr_name_position == 'above' %}selected{% endif %}>Above QR code</option>
+            <option value="below" {% if settings.qr_name_position == 'below' %}selected{% endif %}>Below QR code</option>
+          </select>
+        </label>
+
+        <label>
+          QR code colour
+          <span class="hint">Colour of the QR code modules.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.qr_color }}"></span>
+            <input name="qr_color" value="{{ settings.qr_color }}" placeholder="#ffffff">
+          </span>
+        </label>
+
+        <label>
+          QR background colour
+          <span class="hint">Use strong contrast with the QR code colour for reliable scanning.</span>
+          <span class="color-row">
+            <span class="swatch" style="--swatch: {{ settings.qr_background_color }}"></span>
+            <input name="qr_background_color" value="{{ settings.qr_background_color }}" placeholder="#000000">
+          </span>
+        </label>
+      </div>
+
       <div class="actions">
-        <button type="submit">Save Colours</button>
+        <button type="submit">Save Settings</button>
         <button class="secondary" type="submit" name="action" value="reset">Reset Defaults</button>
       </div>
       <div class="save-state" data-save-state>Changes save automatically.</div>
@@ -456,7 +501,8 @@
   <script>
     const settingsForm = document.getElementById("bracket-settings-form");
     const saveState = document.querySelector("[data-save-state]");
-    const colorInputs = Array.from(settingsForm.querySelectorAll("input"));
+    const colorInputs = Array.from(settingsForm.querySelectorAll(".color-row input"));
+    const settingFields = Array.from(settingsForm.querySelectorAll("input, select"));
     const presetButtons = Array.from(document.querySelectorAll("[data-preset-color]"));
     let activeColorInput = colorInputs[0] || null;
     let saveTimer = null;
@@ -520,11 +566,17 @@
         }
 
         const settings = await response.json();
-        colorInputs.forEach(input => {
-          if (settings[input.name]) {
-            input.value = settings[input.name];
-          }
-        });
+        // A normal autosave may finish while the user is still typing. Do not
+        // replace live fields with that older request's values or the newest
+        // characters will disappear. Reset is the only action that should
+        // intentionally replace every field with values returned by the server.
+        if (actionToSave === "reset") {
+          settingFields.forEach(input => {
+            if (Object.prototype.hasOwnProperty.call(settings, input.name)) {
+              input.value = settings[input.name];
+            }
+          });
+        }
         updateSwatches();
 
         if (saveState) {
@@ -549,15 +601,18 @@
         saveState.textContent = "Changes save automatically.";
       }
       window.clearTimeout(saveTimer);
-      saveTimer = window.setTimeout(saveSettings, 250);
+      saveTimer = window.setTimeout(saveSettings, 600);
     }
+
+    settingFields.forEach(input => {
+      input.addEventListener("input", scheduleSave);
+      input.addEventListener("change", scheduleSave);
+    });
 
     colorInputs.forEach(input => {
       input.addEventListener("focus", () => {
         activeColorInput = input;
       });
-      input.addEventListener("input", scheduleSave);
-      input.addEventListener("change", scheduleSave);
     });
 
     presetButtons.forEach(button => {

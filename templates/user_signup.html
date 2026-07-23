@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Request Executive Account</title>
+  <title>Create User Account</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
@@ -17,7 +17,7 @@
 
     main {
       box-sizing: border-box;
-      width: min(100% - 24px, 430px);
+      width: min(100% - 24px, 390px);
       border: 1px solid #333;
       border-radius: 6px;
       background: #181818;
@@ -41,8 +41,7 @@
       font-weight: bold;
     }
 
-    input,
-    select {
+    input {
       box-sizing: border-box;
       width: 100%;
       border: 1px solid #555;
@@ -53,8 +52,7 @@
       font-size: 16px;
     }
 
-    input:focus,
-    select:focus {
+    input:focus {
       border-color: #7CFF7C;
       outline: none;
     }
@@ -119,7 +117,7 @@
 </head>
 <body>
   <main>
-    <h1>Request Executive Account</h1>
+    <h1>Create User Account</h1>
 
     {% if error %}
       <p class="message">{{ error }}</p>
@@ -132,32 +130,12 @@
       </label>
 
       <label>
-        Known player
-        <input name="player_name" list="known-player-options" autocomplete="off" required>
-      </label>
-
-      <label>
-        Requested role
-        <select name="executive_role">
-          {% for role in executive_roles %}
-            <option value="{{ role }}">{{ role }}</option>
-          {% endfor %}
-        </select>
-      </label>
-
-      <label>
         Password
         <input name="password" type="password" autocomplete="new-password" minlength="8" required>
       </label>
 
-      <datalist id="known-player-options">
-        {% for name in known_player_names %}
-          <option value="{{ name }}"></option>
-        {% endfor %}
-      </datalist>
-
       <div class="actions">
-        <button type="submit">Send Request</button>
+        <button type="submit">Create Account</button>
         <a class="secondary" href="{{ url_for('landing') }}">Back</a>
       </div>
     </form>
@@ -178,7 +156,7 @@
 
       if (!keyboardVisible) return;
 
-      const activeControl = document.querySelector("input:focus, select:focus");
+      const activeControl = document.querySelector("input:focus");
       activeControl?.scrollIntoView({
         block: "center",
         behavior: "smooth"
@@ -189,12 +167,12 @@
     window.visualViewport?.addEventListener("scroll", updateKeyboardLayout);
     window.addEventListener("resize", updateKeyboardLayout);
 
-    document.querySelectorAll("input, select").forEach(control => {
-      control.addEventListener("focus", () => {
+    document.querySelectorAll("input").forEach(input => {
+      input.addEventListener("focus", () => {
         window.setTimeout(updateKeyboardLayout, 120);
       });
 
-      control.addEventListener("blur", () => {
+      input.addEventListener("blur", () => {
         window.setTimeout(updateKeyboardLayout, 80);
       });
     });

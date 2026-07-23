@@ -96,6 +96,49 @@
       gap: 4px;
     }
 
+    .round-robin-logo {
+      position: absolute;
+      width: 250px;
+      height: 250px;
+      object-fit: contain;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .bracket-qr {
+      position: absolute;
+      z-index: 3;
+      display: flex;
+      width: 150px;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      pointer-events: none;
+    }
+
+    .bracket-qr.below {
+      flex-direction: column-reverse;
+    }
+
+    .bracket-qr img {
+      display: block;
+      box-sizing: border-box;
+      width: 150px;
+      height: 150px;
+    }
+
+    .bracket-qr-name {
+      width: 100%;
+      overflow: hidden;
+      color: #f2f2f2;
+      font-size: 10px;
+      font-weight: bold;
+      line-height: 1.15;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .rr-title {
       text-align: center;
       font-size: 8px;
@@ -188,18 +231,33 @@
       font-weight: bold;
     }
 
+    .back-link.return-link {
+      padding: 14px 24px;
+      border-radius: 7px;
+      font-size: 17px;
+    }
+
   </style>
 </head>
 
 <body>
 
 <div class="week-badge">{{ competition.display }}</div>
-<a class="back-link" href="{{ url_for('register') }}">Register players</a>
+{% if bracket_user_logged_in %}
+  <a class="back-link return-link" href="{{ bracket_return_url }}">Return to app</a>
+{% endif %}
 
 <div class="bracket" id="bracket">
   <svg id="lines"></svg>
 
+  <img class="round-robin-logo" id="round-robin-logo" src="{{ url_for('asset_file', filename='logo.png') }}" alt="">
   <div class="round-robin-scoreboard" id="round-robin-scoreboard" aria-label="Round robin scores"></div>
+  {% if not bracket_user_logged_in and bracket_settings.qr_link %}
+    <div class="bracket-qr {{ bracket_settings.qr_name_position }}" id="bracket-qr">
+      {% if bracket_settings.qr_page_name %}<div class="bracket-qr-name">{{ bracket_settings.qr_page_name }}</div>{% endif %}
+      <img src="{{ url_for('bracket_qr', v=bracket_settings._version) }}" style="background: {{ bracket_settings.qr_background_color }}" alt="QR code for {{ bracket_settings.qr_page_name or bracket_settings.qr_link }}">
+    </div>
+  {% endif %}
 </div>
 
 <script>
@@ -216,6 +274,9 @@ const bracket = document.getElementById("bracket");
 const svg = document.getElementById("lines");
 const winners = {};
 const roundRobinScoreboard = document.getElementById("round-robin-scoreboard");
+const roundRobinLogo = document.getElementById("round-robin-logo");
+const bracketQr = document.getElementById("bracket-qr");
+const bracketQrImage = bracketQr?.querySelector("img") || null;
 const undoStack = [];
 let saveQueue = Promise.resolve();
 
@@ -282,6 +343,7 @@ function getBracketContentBounds() {
 
 function fitBracketToScreen() {
   const content = getBracketContentBounds();
+  positionCenterOverlays(content);
   const paddingLeft = fitPaddingLeft();
   const availableW = Math.max(window.innerWidth - paddingLeft, 1);
   const availableH = Math.max(window.innerHeight - FIT_PADDING_Y * 2, 1);
@@ -313,6 +375,8 @@ const leftXs  = [30, 115, 200, 285, 370, 455];
 const rightXs = [1095, 1010, 925, 840, 755, 670];
 
 const SCOREBOARD_SIZE = 118;
+const ROUND_ROBIN_LOGO_SIZE = 250;
+const BRACKET_QR_WIDTH = 150;
 
 const leftFinalLineEnd = leftXs[5] + SLOT_W;
 const rightFinalLineEnd = rightXs[5];
@@ -321,6 +385,28 @@ const FINAL_CENTER_X = (leftFinalLineEnd + rightFinalLineEnd) / 2;
 
 roundRobinScoreboard.style.left = (FINAL_CENTER_X - SCOREBOARD_SIZE / 2) + "px";
 roundRobinScoreboard.style.top = (BRACKET_CENTER_Y - SCOREBOARD_SIZE / 2) + "px";
+roundRobinLogo.style.left = (FINAL_CENTER_X - ROUND_ROBIN_LOGO_SIZE / 2) + "px";
+if (bracketQr) {
+  bracketQr.style.left = (FINAL_CENTER_X - BRACKET_QR_WIDTH / 2) + "px";
+}
+
+function positionCenterOverlays(content) {
+  const contentTop = content.top;
+  const contentBottom = content.top + content.height;
+  const scoreboardTop = roundRobinScoreboard.offsetTop;
+  const scoreboardBottom = scoreboardTop + roundRobinScoreboard.offsetHeight;
+
+  const logoCenterY = (contentTop + scoreboardTop) / 2;
+  roundRobinLogo.style.top = (logoCenterY - ROUND_ROBIN_LOGO_SIZE / 2) + "px";
+
+  if (bracketQr && bracketQrImage) {
+    const qrCenterY = (scoreboardBottom + contentBottom) / 2;
+    const qrImageTopWithinContainer = bracketQrImage.offsetTop;
+    bracketQr.style.top = (
+      qrCenterY - bracketQrImage.offsetHeight / 2 - qrImageTopWithinContainer
+    ) + "px";
+  }
+}
 
 const rounds = [32, 16, 8, 4, 2, 1];
 
