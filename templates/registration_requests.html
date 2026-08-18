@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Registration Requests</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101010; color: #f5f5f5; font-family: Arial, sans-serif; }
+    header { margin-left: 220px; padding: 18px; border-bottom: 1px solid #333; background: #171717; }
+    h1 { margin: 0; font-size: 23px; }
+    main { margin-left: 220px; padding: 18px; }
+    h2 { margin: 22px 0 10px; font-size: 18px; }
+    .executive-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 220px; border-right: 1px solid #333; background: #151515; padding: 16px 12px; }
+    .sidebar-title { margin: 0 0 14px; color: #aaa; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .executive-sidebar nav { display: grid; gap: 7px; }
+    .executive-sidebar a, .executive-sidebar button { box-sizing: border-box; width: 100%; border: 1px solid #444; border-radius: 6px; background: #222; color: #f5f5f5; padding: 9px 12px; font-size: 14px; font-weight: bold; text-align: left; text-decoration: none; cursor: pointer; }
+    .executive-sidebar a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .executive-sidebar form { margin: 16px 0 0; }
+    .sidebar-edge-handle, .sidebar-overlay { display: none; }
+    .message, .error, .empty { border-radius: 7px; padding: 11px 12px; }
+    .message { background: #173417; color: #baffba; }
+    .error { background: #3b1919; color: #ffd0d0; }
+    .empty { border: 1px dashed #444; color: #999; }
+    .requests { display: grid; gap: 9px; }
+    .request-card { border: 1px solid #393939; border-radius: 8px; background: #191919; padding: 12px; }
+    .request-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: #aaa; font-size: 12px; }
+    .request-card form { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 7px; align-items: end; }
+    label { display: grid; gap: 5px; color: #aaa; font-size: 12px; font-weight: bold; }
+    input { width: 100%; border: 1px solid #555; border-radius: 6px; background: #080808; color: #fff; padding: 9px 10px; font: inherit; }
+    button { border: 1px solid #555; border-radius: 6px; padding: 9px 12px; font: inherit; font-weight: bold; cursor: pointer; }
+    button.approve { border-color: #7CFF7C; background: #7CFF7C; color: #111; }
+    button.reject { border-color: #7c4141; background: #321b1b; color: #ffd2d2; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #333; padding: 9px 7px; text-align: left; }
+    th { color: #aaa; }
+    .approved { color: #7CFF7C; }
+    .rejected { color: #ffaaaa; }
+    @media (max-width: 760px) {
+      header, main { margin-left: 0; }
+      .executive-sidebar { transform: translateX(-100%); transition: transform .2s; }
+      body.sidebar-open .executive-sidebar { transform: translateX(0); }
+      .sidebar-edge-handle { display: block; position: fixed; left: 8px; bottom: 8px; z-index: 40; }
+      .sidebar-overlay { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.6); }
+      body.sidebar-open .sidebar-overlay { display: block; }
+      .request-card form { grid-template-columns: 1fr 1fr; }
+      .request-card label { grid-column: 1 / -1; }
+      .history-wrap { overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  {% include "_executive_sidebar.html" %}
+  <header><h1>Player Registration Requests</h1></header>
+  <main>
+    {% if message %}<p class="message">{{ message }}</p>{% endif %}
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+    <h2>Awaiting review ({{ pending_requests|length }})</h2>
+    {% if pending_requests %}
+      <div class="requests">
+        {% for item in pending_requests %}
+          <article class="request-card">
+            <div class="request-meta">
+              <span>{{ item.email }}</span>
+              <span>Requested {{ item.requested_at }}</span>
+            </div>
+            <form method="POST">
+              <input type="hidden" name="request_id" value="{{ item.id }}">
+              <label>
+                Player registration
+                <input name="player_name" value="{{ item.player_name }}" list="known-player-options" required>
+              </label>
+              <button class="approve" type="submit" name="action" value="approve">Approve</button>
+              <button class="reject" type="submit" name="action" value="reject">Reject</button>
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+      <datalist id="known-player-options">
+        {% for player_name in known_player_names %}<option value="{{ player_name }}"></option>{% endfor %}
+      </datalist>
+    {% else %}
+      <div class="empty">No player registrations are awaiting review.</div>
+    {% endif %}
+
+    <h2>Recently processed</h2>
+    <div class="history-wrap">
+      <table>
+        <thead><tr><th>Player</th><th>Account</th><th>Status</th><th>Resolved</th><th>Executive</th></tr></thead>
+        <tbody>
+          {% for item in processed_requests %}
+            <tr>
+              <td>{{ item.player_name }}</td>
+              <td>{{ item.email }}</td>
+              <td class="{{ item.status }}">{{ item.status | title }}</td>
+              <td>{{ item.resolved_at }}</td>
+              <td>{{ item.resolved_by_username }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5">No processed requests yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

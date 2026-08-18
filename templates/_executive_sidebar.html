@@ -9,6 +9,9 @@
     <a class="{% if request.endpoint == 'bracket_settings' %}active{% endif %}" href="{{ url_for('bracket_settings') }}">Settings</a>
     <a class="{% if request.endpoint == 'executive_requests_route' %}active{% endif %}" href="{{ url_for('executive_requests_route') }}">Requests</a>
     <a class="{% if request.endpoint == 'database_browser' %}active{% endif %}" href="{{ url_for('database_browser') }}">Database</a>
+    {% if developer_logged_in %}
+      <a class="{% if request.endpoint == 'developer_page' %}active{% endif %}" href="{{ url_for('developer_page') }}">Dev Tools</a>
+    {% endif %}
   </nav>
   {% if executive_username %}
     <form method="POST" action="{{ url_for('executive_logout') }}">

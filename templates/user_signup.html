@@ -41,7 +41,8 @@
       font-weight: bold;
     }
 
-    input {
+    input,
+    select {
       box-sizing: border-box;
       width: 100%;
       border: 1px solid #555;
@@ -52,7 +53,8 @@
       font-size: 16px;
     }
 
-    input:focus {
+    input:focus,
+    select:focus {
       border-color: #7CFF7C;
       outline: none;
     }
@@ -123,10 +125,21 @@
       <p class="message">{{ error }}</p>
     {% endif %}
 
-    <form method="POST" autocomplete="off">
+    <form method="POST" enctype="multipart/form-data" autocomplete="off">
+      <label>
+        Your name
+        <input name="player_name" value="{{ request.form.get('player_name', '') }}" maxlength="120" autocomplete="name" required autofocus>
+      </label>
+
+      <label>
+        Profile photo <span style="color:#999; font-weight:normal;">(optional)</span>
+        <input name="profile_image" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+        <span style="color:#999; font-size:12px; font-weight:normal;">PNG, JPEG, WebP, or GIF up to 5 MB.</span>
+      </label>
+
       <label>
         Email
-        <input name="email" type="email" autocomplete="username" required autofocus>
+        <input name="email" type="email" autocomplete="username" value="{{ request.form.get('email', '') }}" required>
       </label>
 
       <label>

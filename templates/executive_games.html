@@ -284,6 +284,242 @@
       white-space: nowrap;
     }
 
+    .game-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+    }
+
+    .game-menu {
+      position: relative;
+    }
+
+    button.game-menu-toggle {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 24px;
+      border-color: #444;
+      background: #222;
+      color: #eee;
+      padding: 0;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .game-menu-panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      z-index: 20;
+      width: max-content;
+      min-width: 165px;
+      border: 1px solid #555;
+      border-radius: 6px;
+      background: #252525;
+      padding: 4px;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+    }
+
+    .game-menu-panel button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: #f5f5f5;
+      padding: 8px 9px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .game-menu-panel button:hover {
+      background: #383838;
+    }
+
+    .profile-dialog {
+      box-sizing: border-box;
+      width: min(680px, calc(100vw - 28px));
+      max-height: calc(100vh - 28px);
+      overflow: auto;
+      border: 1px solid #555;
+      border-radius: 10px;
+      background: #171717;
+      color: #f5f5f5;
+      padding: 0;
+    }
+
+    .profile-dialog::backdrop {
+      background: rgba(0, 0, 0, 0.72);
+    }
+
+    .profile-dialog-header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #333;
+      background: #171717;
+      padding: 14px 16px;
+    }
+
+    .profile-dialog-header h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    button.profile-dialog-close {
+      width: 34px;
+      height: 32px;
+      padding: 0;
+      background: #222;
+      color: #fff;
+    }
+
+    .profile-dialog-body {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .profile-card {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      gap: 12px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #202020;
+      padding: 12px;
+    }
+
+    .profile-card-photo {
+      width: 88px;
+      height: 88px;
+      border-radius: 8px;
+      background: #111;
+      object-fit: cover;
+    }
+
+    button.profile-photo-button {
+      width: 88px;
+      height: 88px;
+      border: 0;
+      background: transparent;
+      padding: 0;
+    }
+
+    button.profile-photo-button:hover .profile-card-photo,
+    button.profile-photo-button:focus-visible .profile-card-photo {
+      outline: 2px solid #7CFF7C;
+      outline-offset: 2px;
+    }
+
+    .profile-card-photo.empty {
+      display: grid;
+      place-items: center;
+      color: #777;
+      font-size: 11px;
+      text-align: center;
+    }
+
+    .profile-card h3 {
+      margin: 0 0 3px;
+      font-size: 16px;
+    }
+
+    .profile-kind {
+      margin-bottom: 8px;
+      color: #7CFF7C;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+    .profile-field {
+      margin-top: 5px;
+      overflow-wrap: anywhere;
+      color: #ddd;
+      font-size: 13px;
+    }
+
+    .profile-field strong {
+      color: #999;
+    }
+
+    .profile-unavailable {
+      grid-column: 1 / -1;
+      color: #aaa;
+      font-size: 13px;
+    }
+
+    .photo-viewer {
+      width: 100vw;
+      max-width: none;
+      height: 100vh;
+      max-height: none;
+      border: 0;
+      background: rgba(0, 0, 0, 0.96);
+      padding: 0;
+    }
+
+    .photo-viewer::backdrop {
+      background: rgba(0, 0, 0, 0.96);
+    }
+
+    .photo-viewer-content {
+      position: relative;
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .photo-viewer-image {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: none;
+      max-height: none;
+      transform: translateY(-50%);
+    }
+
+    button.photo-viewer-close {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 2;
+      width: 40px;
+      height: 40px;
+      border-color: #666;
+      border-radius: 50%;
+      background: #222;
+      color: #fff;
+      padding: 0;
+      font-size: 25px;
+    }
+
+    @media (max-width: 520px) {
+      .profile-card {
+        grid-template-columns: 64px minmax(0, 1fr);
+      }
+
+      .profile-card-photo {
+        width: 64px;
+        height: 64px;
+      }
+
+      button.profile-photo-button {
+        width: 64px;
+        height: 64px;
+      }
+    }
+
     .status {
       color: #111;
       background: #ccc;
@@ -646,19 +882,27 @@
               <article class="game {% if game.played %}played{% elif game.active %}active{% endif %}" data-played="{{ game.played | tojson }}">
                 <div class="game-header">
                   <span>{{ game.display_id or game.id }}</span>
-                  {% if game.played %}
-                    <span class="status played">Played</span>
-                  {% elif game.active %}
-                    {% if game.table_number %}
-                      <span class="table-badge">T{{ game.table_number }}</span>
+                  <div class="game-header-actions">
+                    {% if game.played %}
+                      <span class="status played">Played</span>
+                    {% elif game.active %}
+                      {% if game.table_number %}
+                        <span class="table-badge">T{{ game.table_number }}</span>
+                      {% else %}
+                        <span class="status active">Started</span>
+                      {% endif %}
+                    {% elif game.ready %}
+                      <span class="status">Ready</span>
                     {% else %}
-                      <span class="status active">Started</span>
+                      <span class="status waiting">Waiting</span>
                     {% endif %}
-                  {% elif game.ready %}
-                    <span class="status">Ready</span>
-                  {% else %}
-                    <span class="status waiting">Waiting</span>
-                  {% endif %}
+                    <div class="game-menu">
+                      <button class="game-menu-toggle" type="button" aria-label="Open menu for {{ game.display_id or game.id }}" aria-expanded="false">&#8942;</button>
+                      <div class="game-menu-panel" hidden>
+                        <button type="button" data-view-game-profiles data-profile-url="{{ url_for('game_player_profiles', match_id=game.id) }}">View player profiles</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="players">
@@ -738,6 +982,21 @@
     {% endfor %}
   </main>
 
+  <dialog class="profile-dialog" id="game-profile-dialog" aria-labelledby="game-profile-title">
+    <div class="profile-dialog-header">
+      <h2 id="game-profile-title">Player profiles</h2>
+      <button class="profile-dialog-close" id="game-profile-close" type="button" aria-label="Close player profiles">&times;</button>
+    </div>
+    <div class="profile-dialog-body" id="game-profile-body"></div>
+  </dialog>
+
+  <dialog class="photo-viewer" id="profile-photo-viewer" aria-label="Fullscreen profile photo">
+    <div class="photo-viewer-content" id="profile-photo-viewer-content">
+      <button class="photo-viewer-close" id="profile-photo-viewer-close" type="button" aria-label="Close fullscreen photo">&times;</button>
+      <img class="photo-viewer-image" id="profile-photo-viewer-image" src="" alt="">
+    </div>
+  </dialog>
+
   {% if round_jump_links %}
     <nav class="round-jump-nav" id="round-jump-nav" aria-label="Jump to active rounds">
       {% for round in round_jump_links %}
@@ -760,7 +1019,160 @@
     const gameCards = Array.from(document.querySelectorAll(".game"));
     const roundJumpNav = document.getElementById("round-jump-nav");
     const roundJumpLinks = Array.from(document.querySelectorAll("[data-round-jump]"));
+    const profileDialog = document.getElementById("game-profile-dialog");
+    const profileDialogTitle = document.getElementById("game-profile-title");
+    const profileDialogBody = document.getElementById("game-profile-body");
+    const photoViewer = document.getElementById("profile-photo-viewer");
+    const photoViewerContent = document.getElementById("profile-photo-viewer-content");
+    const photoViewerImage = document.getElementById("profile-photo-viewer-image");
     let latestBracketVersion = Number(initialBracketVersion) || 0;
+
+    function closeGameMenus(exceptMenu = null) {
+      document.querySelectorAll(".game-menu").forEach(menu => {
+        if (menu === exceptMenu) return;
+        menu.querySelector(".game-menu-panel").hidden = true;
+        menu.querySelector(".game-menu-toggle").setAttribute("aria-expanded", "false");
+      });
+    }
+
+    document.querySelectorAll(".game-menu-toggle").forEach(toggle => {
+      toggle.addEventListener("click", event => {
+        event.stopPropagation();
+        const menu = toggle.closest(".game-menu");
+        const panel = menu.querySelector(".game-menu-panel");
+        const willOpen = panel.hidden;
+        closeGameMenus(menu);
+        panel.hidden = !willOpen;
+        toggle.setAttribute("aria-expanded", String(willOpen));
+      });
+    });
+
+    document.addEventListener("click", () => closeGameMenus());
+
+    function addProfileField(container, label, value) {
+      if (!value) return;
+      const field = document.createElement("div");
+      field.className = "profile-field";
+      const strong = document.createElement("strong");
+      strong.textContent = `${label}: `;
+      field.append(strong, document.createTextNode(value));
+      container.appendChild(field);
+    }
+
+    function renderProfileCard(profile) {
+      const card = document.createElement("article");
+      card.className = "profile-card";
+
+      if (!profile.found) {
+        const unavailable = document.createElement("div");
+        unavailable.className = "profile-unavailable";
+        unavailable.textContent = `${profile.display_name || "Player"}: ${profile.message}`;
+        card.appendChild(unavailable);
+        return card;
+      }
+
+      if (profile.profile_image_url) {
+        const photoButton = document.createElement("button");
+        photoButton.className = "profile-photo-button";
+        photoButton.type = "button";
+        photoButton.setAttribute("aria-label", `View fullscreen photo of ${profile.name}`);
+        const image = document.createElement("img");
+        image.className = "profile-card-photo";
+        image.src = profile.profile_image_url;
+        image.alt = `Profile photo for ${profile.name}`;
+        photoButton.appendChild(image);
+        photoButton.addEventListener("click", () => {
+          photoViewerImage.src = profile.profile_image_url;
+          photoViewerImage.alt = `Fullscreen profile photo of ${profile.name}`;
+          photoViewer.showModal();
+        });
+        card.appendChild(photoButton);
+      } else {
+        const emptyPhoto = document.createElement("div");
+        emptyPhoto.className = "profile-card-photo empty";
+        emptyPhoto.textContent = "No photo";
+        card.appendChild(emptyPhoto);
+      }
+
+      const details = document.createElement("div");
+      const name = document.createElement("h3");
+      name.textContent = profile.name;
+      const kind = document.createElement("div");
+      kind.className = "profile-kind";
+      kind.textContent = profile.is_member ? "Official member" : "Known player";
+      details.append(name, kind);
+      addProfileField(details, "Instagram", profile.instagram);
+      addProfileField(details, "Phone", profile.phone);
+      addProfileField(details, "Email", profile.email);
+      addProfileField(details, "Notes", profile.notes);
+      addProfileField(details, "First seen", profile.first_seen_at);
+      addProfileField(details, "Last seen", profile.last_seen_at);
+      if (!profile.instagram && !profile.phone && !profile.email && !profile.notes) {
+        addProfileField(details, "Profile", "No additional information has been added yet");
+      }
+      card.appendChild(details);
+      return card;
+    }
+
+    document.querySelectorAll("[data-view-game-profiles]").forEach(button => {
+      button.addEventListener("click", async event => {
+        event.stopPropagation();
+        closeGameMenus();
+        profileDialogTitle.textContent = "Player profiles";
+        profileDialogBody.textContent = "Loading profiles…";
+        profileDialog.showModal();
+
+        try {
+          const response = await fetch(button.dataset.profileUrl, {
+            headers: { "Accept": "application/json" },
+            cache: "no-store"
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || "Profiles could not be loaded.");
+          }
+
+          profileDialogTitle.textContent = `${result.game_id} player profiles`;
+          profileDialogBody.textContent = "";
+          if (!result.profiles.length) {
+            profileDialogBody.textContent = "There are no players assigned to this game yet.";
+          } else {
+            result.profiles.forEach(profile => {
+              profileDialogBody.appendChild(renderProfileCard(profile));
+            });
+          }
+        } catch (error) {
+          profileDialogBody.textContent = error.message || "Profiles could not be loaded.";
+        }
+      });
+    });
+
+    document.getElementById("game-profile-close").addEventListener("click", () => {
+      profileDialog.close();
+    });
+
+    profileDialog.addEventListener("click", event => {
+      if (event.target === profileDialog) profileDialog.close();
+    });
+
+    function closePhotoViewer() {
+      photoViewer.close();
+      photoViewerImage.src = "";
+      photoViewerImage.alt = "";
+    }
+
+    document.getElementById("profile-photo-viewer-close").addEventListener("click", closePhotoViewer);
+
+    photoViewer.addEventListener("click", event => {
+      if (event.target === photoViewer || event.target === photoViewerContent) {
+        closePhotoViewer();
+      }
+    });
+
+    photoViewer.addEventListener("close", () => {
+      photoViewerImage.src = "";
+      photoViewerImage.alt = "";
+    });
 
     gameCards.forEach(game => {
       const playerNames = Array.from(game.querySelectorAll(".player"))

@@ -133,7 +133,17 @@
 
       <label>
         Known player
-        <input name="player_name" list="known-player-options" autocomplete="off" required>
+        <select name="known_player_name">
+          <option value="">Choose a known player</option>
+          {% for name in known_player_names %}
+            <option value="{{ name }}" {% if request.form.get('known_player_name') == name %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        Name not listed above
+        <input name="new_player_name" value="{{ request.form.get('new_player_name', '') }}" maxlength="120" autocomplete="name" placeholder="Enter the executive's name">
       </label>
 
       <label>
@@ -149,12 +159,6 @@
         Password
         <input name="password" type="password" autocomplete="new-password" minlength="8" required>
       </label>
-
-      <datalist id="known-player-options">
-        {% for name in known_player_names %}
-          <option value="{{ name }}"></option>
-        {% endfor %}
-      </datalist>
 
       <div class="actions">
         <button type="submit">Send Request</button>

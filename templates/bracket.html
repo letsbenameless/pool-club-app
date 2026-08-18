@@ -147,6 +147,51 @@
       text-transform: uppercase;
     }
 
+    .finals-game {
+      position: relative;
+      display: grid;
+      gap: 1px;
+    }
+
+    .finals-game .rr-row {
+      padding-right: 25px;
+    }
+
+    .finals-game .table-badge {
+      top: 50%;
+      right: 3px;
+      bottom: auto;
+      left: auto;
+      transform: translateY(-50%);
+    }
+
+    .finals-game + .finals-game {
+      margin-top: 3px;
+      padding-top: 3px;
+      border-top: 1px solid #333;
+    }
+
+    .finals-game-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 4px;
+      color: #aaa;
+      font-size: 7px;
+      font-weight: bold;
+      line-height: 1.1;
+      text-transform: uppercase;
+    }
+
+    .finals-game.active .rr-name {
+      color: var(--bracket-highlight);
+      font-weight: bold;
+    }
+
+    .round-robin-scoreboard.round-robin-active .rr-name {
+      color: var(--bracket-highlight);
+      font-weight: bold;
+    }
+
     .rr-row {
       display: grid;
       grid-template-columns: auto 1fr auto;
@@ -216,6 +261,19 @@
       border-radius: 4px;
     }
 
+    .slot[id^="R-"] .table-badge {
+      right: auto;
+      left: -67px;
+    }
+
+    .bracket-line-table-badge {
+      right: auto;
+      bottom: auto;
+      left: 0;
+      top: 0;
+      transform: translate(-50%, calc(-100% - 6px));
+    }
+
     .back-link {
       position: fixed;
       left: 50%;
@@ -250,7 +308,7 @@
 <div class="bracket" id="bracket">
   <svg id="lines"></svg>
 
-  <img class="round-robin-logo" id="round-robin-logo" src="{{ url_for('asset_file', filename='logo.png') }}" alt="">
+  <img class="round-robin-logo" id="round-robin-logo" src="{{ url_for('asset_file', filename=bracket_settings.logo_filename, v=bracket_settings._version) }}" alt="Competition logo">
   <div class="round-robin-scoreboard" id="round-robin-scoreboard" aria-label="Round robin scores"></div>
   {% if not bracket_user_logged_in and bracket_settings.qr_link %}
     <div class="bracket-qr {{ bracket_settings.qr_name_position }}" id="bracket-qr">
@@ -365,6 +423,7 @@ function fitBracketToScreen() {
 
 const SLOT_W = 52;
 const SLOT_H = 18;
+const TABLE_BADGE_X_OFFSET = 8;
 
 const START_Y = 35;
 const BASE_GAP = 20;
@@ -535,10 +594,16 @@ function sendBracketStateBeforeUnload() {
 }
 
 function renderActiveMatches() {
+  const centerFinalMatchIds = new Set(
+    bracketData.round_robin_scoreboard?.type === "knockout"
+      ? (bracketData.round_robin_scoreboard.games || []).map(game => game.id)
+      : []
+  );
+
   document.querySelectorAll(".active-match").forEach(slot => {
     slot.classList.remove("active-match");
   });
-  document.querySelectorAll(".table-badge").forEach(badge => {
+  document.querySelectorAll(".bracket-line-table-badge").forEach(badge => {
     badge.remove();
   });
   activeMatchIds.clear();
@@ -553,18 +618,48 @@ function renderActiveMatches() {
   });
 
   Object.entries(activeTables).forEach(([matchId, tableNumber]) => {
-    const [topSlotId] = getMatchSlotIds(matchId);
+    const [topSlotId, bottomSlotId] = getMatchSlotIds(matchId);
     const top = document.getElementById(topSlotId);
+    const bottom = document.getElementById(bottomSlotId);
 
-    if (!top || !tableNumber) return;
+    if (!top || !bottom || !tableNumber) return;
 
     top.classList.add("active-match");
     activeMatchIds.add(matchId);
 
+    // Finals shown in the centre panel already have their own table badge.
+    if (centerFinalMatchIds.has(matchId)) return;
+
+    const [sidePrefix, roundIndexText, topSlotIndexText] = topSlotId.split("-");
+    const roundIndex = Number(roundIndexText);
+    const topSlotIndex = Number(topSlotIndexText);
+    const nextSlot = document.getElementById(
+      `${sidePrefix}-${roundIndex + 1}-${Math.floor(topSlotIndex / 2)}`
+    );
+    if (!nextSlot) return;
+
+    const currentLineX = sidePrefix === "L"
+      ? top.offsetLeft + SLOT_W
+      : top.offsetLeft;
+    const jointX = sidePrefix === "L"
+      ? currentLineX + 18
+      : currentLineX - 18;
+    const nextLineX = sidePrefix === "L"
+      ? nextSlot.offsetLeft + SLOT_W
+      : nextSlot.offsetLeft;
+    const matchMidpointY = (
+      top.offsetTop + SLOT_H + bottom.offsetTop + SLOT_H
+    ) / 2;
+
     const badge = document.createElement("div");
-    badge.className = "table-badge";
+    badge.className = "table-badge bracket-line-table-badge";
     badge.textContent = `T${tableNumber}`;
-    top.appendChild(badge);
+    const horizontalOffset = sidePrefix === "L"
+      ? TABLE_BADGE_X_OFFSET
+      : -TABLE_BADGE_X_OFFSET;
+    badge.style.left = `${(jointX + nextLineX) / 2 + horizontalOffset}px`;
+    badge.style.top = `${matchMidpointY}px`;
+    bracket.appendChild(badge);
   });
 }
 
@@ -906,9 +1001,80 @@ function drawFinalConnector(fromId, side) {
 function renderRoundRobinScoreboard() {
   const scoreboard = bracketData.round_robin_scoreboard || {};
   roundRobinScoreboard.textContent = "";
+  roundRobinScoreboard.classList.toggle(
+    "round-robin-active",
+    Boolean(scoreboard.active && scoreboard.type !== "knockout")
+  );
   document.querySelectorAll(".round-robin-finalist").forEach(slot => {
     slot.classList.remove("round-robin-finalist");
   });
+
+  if (scoreboard.active && scoreboard.type === "knockout" && Array.isArray(scoreboard.games)) {
+    const title = document.createElement("div");
+    title.className = "rr-title";
+    title.textContent = `Finals ${scoreboard.played || 0}/${scoreboard.total || 2}`;
+    roundRobinScoreboard.appendChild(title);
+
+    if (scoreboard.played === scoreboard.total) {
+      ["1", "2", "3"].forEach(placeNumber => {
+        const row = document.createElement("div");
+        row.className = "rr-row";
+
+        const place = document.createElement("span");
+        place.className = "rr-place";
+        place.textContent = `${placeNumber}${placeNumber === "1" ? "st" : placeNumber === "2" ? "nd" : "rd"}`;
+
+        const name = document.createElement("span");
+        name.className = "rr-name";
+        name.textContent = scoreboard.placements?.[placeNumber] || "";
+
+        row.append(place, name);
+        roundRobinScoreboard.appendChild(row);
+      });
+      return;
+    }
+
+    scoreboard.games.forEach(game => {
+      const gameElement = document.createElement("div");
+      gameElement.className = "finals-game";
+      gameElement.classList.toggle("active", Boolean(game.active));
+
+      const gameTitle = document.createElement("div");
+      gameTitle.className = "finals-game-title";
+      gameTitle.textContent = game.label;
+      gameElement.appendChild(gameTitle);
+
+      if (game.table_number) {
+        const tableBadge = document.createElement("div");
+        tableBadge.className = "table-badge";
+        tableBadge.textContent = `T${game.table_number}`;
+        gameElement.appendChild(tableBadge);
+      }
+
+      game.players.forEach(player => {
+        const row = document.createElement("div");
+        row.className = "rr-row";
+
+        const place = document.createElement("span");
+        place.className = "rr-place";
+        place.textContent = player.place || "";
+
+        const name = document.createElement("span");
+        name.className = "rr-name";
+        name.textContent = player.name || "";
+
+        const result = document.createElement("span");
+        result.className = "rr-score";
+        result.textContent = player.winner ? "W" : "";
+
+        row.append(place, name, result);
+        gameElement.appendChild(row);
+      });
+
+      roundRobinScoreboard.appendChild(gameElement);
+    });
+    return;
+  }
 
   if (!scoreboard.active || !Array.isArray(scoreboard.players) || !scoreboard.players.length) {
     return;

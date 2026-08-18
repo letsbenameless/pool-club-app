@@ -153,6 +153,74 @@
       line-height: 1.35;
     }
 
+    .settings-error {
+      margin-bottom: 16px;
+      border: 1px solid #8d3838;
+      border-radius: 7px;
+      background: #2b1515;
+      color: #ffbdbd;
+      padding: 11px 13px;
+    }
+
+    .logo-setting {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .logo-preview {
+      width: 150px;
+      height: 150px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #050505;
+      object-fit: contain;
+    }
+
+    .logo-upload {
+      display: grid;
+      gap: 8px;
+      flex: 1 1 280px;
+    }
+
+    .logo-history {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+      gap: 10px;
+      margin: 12px 0 24px;
+    }
+
+    .logo-history-item {
+      min-width: 0;
+      border: 1px solid #303030;
+      border-radius: 8px;
+      background: #101010;
+      padding: 8px;
+      color: #aaa;
+      font-size: 10px;
+      line-height: 1.25;
+      cursor: pointer;
+    }
+
+    .logo-history-item:focus-visible {
+      outline: 2px solid #FF7900;
+      outline-offset: 2px;
+    }
+
+    .logo-history-item.active {
+      border-color: var(--accent, #ff7900);
+    }
+
+    .logo-history-item img {
+      display: block;
+      width: 100%;
+      height: 72px;
+      margin-bottom: 6px;
+      object-fit: contain;
+    }
+
     .color-row {
       display: grid;
       grid-template-columns: 34px 1fr;
@@ -365,6 +433,44 @@
         grid-template-columns: 1fr;
       }
 
+      .logo-setting {
+        display: grid;
+        grid-template-columns: 96px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        margin-bottom: 18px;
+      }
+
+      .logo-preview {
+        width: 96px;
+        height: 96px;
+      }
+
+      .logo-upload {
+        min-width: 0;
+      }
+
+      .logo-history {
+        display: flex;
+        width: 100%;
+        max-width: 100%;
+        gap: 10px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 2px 2px 10px;
+        scroll-snap-type: x proximity;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .logo-history-item {
+        flex: 0 0 118px;
+        scroll-snap-align: start;
+      }
+
+      .logo-history-item img {
+        height: 68px;
+      }
+
       main {
         margin-left: 0;
         padding: 12px;
@@ -385,11 +491,47 @@
     <form
       class="panel"
       method="POST"
+      enctype="multipart/form-data"
       action="{{ url_for('bracket_settings') }}"
       autocomplete="off"
       id="bracket-settings-form"
       data-save-url="{{ url_for('bracket_settings') }}"
     >
+      {% if error %}<div class="settings-error">{{ error }}</div>{% endif %}
+
+      <h2>Competition branding</h2>
+      <div class="logo-setting">
+        <img
+          class="logo-preview"
+          data-logo-preview
+          src="{{ url_for('asset_file', filename=settings.logo_filename, v=settings._version) }}"
+          alt="Current competition logo"
+        >
+        <label class="logo-upload">
+          Competition logo
+          <span class="hint">PNG, JPEG, WebP, or GIF. Maximum 5 MB. The image is fitted inside the bracket without cropping.</span>
+          <input name="competition_logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+          <input name="logo_filename" type="hidden" value="{{ settings.logo_filename }}" data-logo-field>
+        </label>
+      </div>
+
+      <div class="hint">Logo history</div>
+      <div class="logo-history" data-logo-history>
+        {% for logo in logo_history %}
+          <div
+            class="logo-history-item {% if logo.filename == settings.logo_filename %}active{% endif %}"
+            data-logo-history-item="{{ logo.filename }}"
+            role="button"
+            tabindex="0"
+            aria-pressed="{{ 'true' if logo.filename == settings.logo_filename else 'false' }}"
+          >
+            <img src="{{ url_for('asset_file', filename=logo.filename) }}" alt="{{ logo.label }}">
+            <strong>{{ logo.label }}</strong><br>
+            {{ logo.modified_label }}
+          </div>
+        {% endfor %}
+      </div>
+
       <h2>Colours</h2>
       <div class="hint" style="margin-bottom: 12px;">
         Use hex values such as #FF7900 or RGB values such as rgb(255, 121, 0).
@@ -504,6 +646,10 @@
     const colorInputs = Array.from(settingsForm.querySelectorAll(".color-row input"));
     const settingFields = Array.from(settingsForm.querySelectorAll("input, select"));
     const presetButtons = Array.from(document.querySelectorAll("[data-preset-color]"));
+    const competitionLogoInput = settingsForm.elements.competition_logo;
+    const logoPreview = document.querySelector("[data-logo-preview]");
+    const logoField = document.querySelector("[data-logo-field]");
+    const logoHistory = document.querySelector("[data-logo-history]");
     let activeColorInput = colorInputs[0] || null;
     let saveTimer = null;
     let saveInFlight = false;
@@ -566,6 +712,40 @@
         }
 
         const settings = await response.json();
+        if (logoPreview && settings.logo_filename) {
+          logoPreview.src = `/assets/${encodeURIComponent(settings.logo_filename)}?v=${settings._version || Date.now()}`;
+        }
+        if (logoField && settings.logo_filename) {
+          logoField.value = settings.logo_filename;
+          let matchingItem = Array.from(document.querySelectorAll("[data-logo-history-item]")).find(
+            item => item.dataset.logoHistoryItem === settings.logo_filename
+          );
+          if (!matchingItem && logoHistory) {
+            matchingItem = document.createElement("div");
+            matchingItem.className = "logo-history-item";
+            matchingItem.dataset.logoHistoryItem = settings.logo_filename;
+            matchingItem.setAttribute("role", "button");
+            matchingItem.setAttribute("tabindex", "0");
+            matchingItem.setAttribute("aria-pressed", "false");
+
+            const image = document.createElement("img");
+            image.src = `/assets/${encodeURIComponent(settings.logo_filename)}?v=${settings._version || Date.now()}`;
+            image.alt = "Uploaded logo";
+            const label = document.createElement("strong");
+            label.textContent = "Uploaded logo";
+            matchingItem.append(image, label, document.createElement("br"), "Just uploaded");
+            logoHistory.prepend(matchingItem);
+            bindLogoHistoryItem(matchingItem);
+          }
+          document.querySelectorAll("[data-logo-history-item]").forEach(item => {
+            const selected = item.dataset.logoHistoryItem === settings.logo_filename;
+            item.classList.toggle("active", selected);
+            item.setAttribute("aria-pressed", selected ? "true" : "false");
+          });
+        }
+        if (competitionLogoInput) {
+          competitionLogoInput.value = "";
+        }
         // A normal autosave may finish while the user is still typing. Do not
         // replace live fields with that older request's values or the newest
         // characters will disappear. Reset is the only action that should
@@ -608,6 +788,34 @@
       input.addEventListener("input", scheduleSave);
       input.addEventListener("change", scheduleSave);
     });
+
+    function selectLogoFromHistory(item) {
+      const filename = item.dataset.logoHistoryItem;
+      if (!logoField || !filename) return;
+
+      logoField.value = filename;
+      if (logoPreview) {
+        logoPreview.src = `/assets/${encodeURIComponent(filename)}`;
+      }
+      document.querySelectorAll("[data-logo-history-item]").forEach(historyItem => {
+        const selected = historyItem === item;
+        historyItem.classList.toggle("active", selected);
+        historyItem.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
+      saveSettings();
+    }
+
+    function bindLogoHistoryItem(item) {
+      item.addEventListener("click", () => selectLogoFromHistory(item));
+      item.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectLogoFromHistory(item);
+        }
+      });
+    }
+
+    document.querySelectorAll("[data-logo-history-item]").forEach(bindLogoHistoryItem);
 
     colorInputs.forEach(input => {
       input.addEventListener("focus", () => {

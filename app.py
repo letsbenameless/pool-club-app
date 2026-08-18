@@ -43,6 +43,7 @@ REGISTRATION_STATE_ID = 1
 FINANCE_STATE_ID = 1
 BRACKET_SETTINGS_ID = 1
 REGISTRATION_FIELDS = ("new_players", "late_players", "buybacks")
+DEVELOPER_EMAILS = {"rockateeer12@gmail.com"}
 SIDE_ROUNDS = [32, 16, 8, 4, 2, 1]
 GAME_ROUND_LABELS = {
     0: "First Round",
@@ -69,6 +70,7 @@ GAME_ROUND_NUMBER_LABELS = {
     5: "Sixth Round",
 }
 ROUND_ROBIN_FINAL_SHORT_LABEL = "RR Final"
+THIRD_PLACE_MATCH_ID = "P-3-0"
 ROUND_ORDER = [0, 1, 2, 3, 4, "final"]
 TABLE_COUNT = 3
 PRESET_WINNINGS = {
@@ -95,7 +97,21 @@ DEFAULT_BRACKET_SETTINGS = {
     "qr_name_position": "above",
     "qr_color": "#ffffff",
     "qr_background_color": "#000000",
+    "logo_filename": "logo.png",
 }
+BRACKET_COLOR_SETTING_KEYS = (
+    "highlight_color",
+    "remove_hover_color",
+    "table_badge_background",
+    "table_badge_text",
+)
+COMPETITION_LOGO_MAX_BYTES = 5 * 1024 * 1024
+COMPETITION_LOGO_SIGNATURES = (
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xff\xd8\xff", "jpg"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+)
 BRACKET_COLOR_PRESETS = [
     {"name": "Orange", "value": "#FF7900"},
     {"name": "Green", "value": "#7CFF7C"},
@@ -154,6 +170,7 @@ def inject_competition_context():
         "executive_username": session.get("executive_username", ""),
         "executive_player_name": session.get("executive_player_name", ""),
         "executive_role": session.get("executive_role", EXECUTIVE_ROLES[0]),
+        "developer_logged_in": is_developer_logged_in(),
     }
 
 
@@ -187,6 +204,19 @@ def init_db():
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS member_profiles (
+                member_name TEXT PRIMARY KEY,
+                is_member INTEGER NOT NULL DEFAULT 0,
+                profile_image TEXT NOT NULL DEFAULT '',
+                instagram TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS match_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 match_id TEXT NOT NULL,
@@ -216,6 +246,9 @@ def init_db():
                 UNIQUE(match_result_id)
             );
         """)
+        ensure_member_profiles_schema(conn)
+        migrate_known_players_to_profiles(conn)
+        conn.commit()
         conn.execute("""
             INSERT OR IGNORE INTO game_history (
                 match_result_id, match_id, winner_name, loser_name,
@@ -294,9 +327,41 @@ def ensure_user_accounts_schema(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
+            player_name TEXT NOT NULL DEFAULT '',
+            claim_status TEXT NOT NULL DEFAULT 'pending',
+            profile_image TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_login_at TEXT
         )
+    """)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_accounts)")}
+    if "player_name" not in columns:
+        conn.execute("ALTER TABLE user_accounts ADD COLUMN player_name TEXT NOT NULL DEFAULT ''")
+    if "claim_status" not in columns:
+        conn.execute("ALTER TABLE user_accounts ADD COLUMN claim_status TEXT NOT NULL DEFAULT 'pending'")
+    if "profile_image" not in columns:
+        conn.execute("ALTER TABLE user_accounts ADD COLUMN profile_image TEXT NOT NULL DEFAULT ''")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS player_registration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_account_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TEXT,
+            resolved_by_username TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY(user_account_id) REFERENCES user_accounts(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS one_pending_registration_per_account
+        ON player_registration_requests(user_account_id)
+        WHERE status = 'pending'
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS one_pending_registration_per_player
+        ON player_registration_requests(player_name COLLATE NOCASE)
+        WHERE status = 'pending'
     """)
 
 
@@ -311,6 +376,19 @@ def clean_email(value):
         return ""
 
     return email
+
+
+def clean_requested_player_name(value):
+    name = clean_player_name(value)[:120]
+    if not name or TEAM_SEPARATOR_RE.search(name):
+        return ""
+    return name
+
+
+def is_developer_logged_in():
+    account_email = clean_email(session.get("user_email", ""))
+    executive_email = clean_email(session.get("executive_username", ""))
+    return account_email in DEVELOPER_EMAILS or executive_email in DEVELOPER_EMAILS
 
 
 def clean_executive_role(role):
@@ -335,7 +413,8 @@ def get_user_account(email):
         ensure_user_accounts_schema(conn)
         return conn.execute(
             """
-            SELECT id, email, password_hash
+            SELECT id, email, password_hash,
+                   player_name, claim_status, profile_image
             FROM user_accounts
             WHERE email = ?
             """,
@@ -343,7 +422,7 @@ def get_user_account(email):
         ).fetchone()
 
 
-def create_user_account(email, password):
+def create_user_account(email, password, player_name="", profile_image=""):
     clean = clean_email(email)
 
     if not clean:
@@ -352,15 +431,25 @@ def create_user_account(email, password):
     if len(password or "") < 8:
         return False, "Use a password with at least 8 characters."
 
+    requested_player = clean_requested_player_name(player_name)
+    if not requested_player:
+        return False, "Enter your name."
+
     try:
         with closing(get_db()) as conn:
             ensure_user_accounts_schema(conn)
             conn.execute(
                 """
-                INSERT INTO user_accounts (email, password_hash)
-                VALUES (?, ?)
+                INSERT INTO user_accounts (
+                    email, password_hash, player_name, claim_status, profile_image
+                ) VALUES (?, ?, ?, 'pending', ?)
                 """,
-                (clean, generate_password_hash(password))
+                (
+                    clean,
+                    generate_password_hash(password),
+                    requested_player,
+                    str(profile_image or "")[:240],
+                )
             )
             conn.commit()
     except sqlite3.IntegrityError:
@@ -384,6 +473,193 @@ def login_user_account(user):
             (int(user["id"]),)
         )
         conn.commit()
+
+
+def current_user_account():
+    user_id = session.get("user_account_id")
+    if not user_id:
+        return None
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        return conn.execute(
+            """
+            SELECT id, email, player_name, claim_status, profile_image,
+                   created_at, last_login_at
+            FROM user_accounts
+            WHERE id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+
+
+def pending_registration_for_account(user_account_id):
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        return conn.execute(
+            """
+            SELECT id, player_name, status, requested_at
+            FROM player_registration_requests
+            WHERE user_account_id = ? AND status = 'pending'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_account_id),),
+        ).fetchone()
+
+
+def create_player_registration_request(user):
+    player_name = clean_requested_player_name(user["player_name"])
+    if not player_name:
+        return False, "Your account is not linked to a known-player profile."
+    try:
+        with closing(get_db()) as conn:
+            ensure_user_accounts_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO player_registration_requests (user_account_id, player_name)
+                VALUES (?, ?)
+                """,
+                (int(user["id"]), player_name),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        return False, "A registration for this account or player is already awaiting executive review."
+    return True, "Your registration request has been sent to the executives."
+
+
+def load_player_registration_requests(status="pending"):
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT r.id, r.player_name, r.status, r.requested_at, r.resolved_at,
+                   r.resolved_by_username, u.email, u.claim_status,
+                   COALESCE(p.is_member, 0) AS is_member
+            FROM player_registration_requests AS r
+            JOIN user_accounts AS u ON u.id = r.user_account_id
+            LEFT JOIN member_profiles AS p
+              ON p.member_name = r.player_name COLLATE NOCASE
+            WHERE r.status = ?
+            ORDER BY r.requested_at, r.id
+            """,
+            (status,),
+        ).fetchall()
+    requests = []
+    for row in rows:
+        item = dict(row)
+        name_parts = item["player_name"].split()
+        item["display_name"] = (
+            f"{name_parts[0]} {name_parts[-1]}"
+            if len(name_parts) > 1
+            else item["player_name"]
+        )
+        requests.append(item)
+    return requests
+
+
+def resolve_player_registration_request(request_id, action, edited_player_name, executive_username):
+    if action not in {"approve", "reject"}:
+        return False, "Unknown registration action."
+
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT r.id, r.user_account_id, r.player_name, r.status,
+                   u.profile_image
+            FROM player_registration_requests AS r
+            JOIN user_accounts AS u ON u.id = r.user_account_id
+            WHERE r.id = ?
+            """,
+            (int(request_id),),
+        ).fetchone()
+        if not row or row["status"] != "pending":
+            conn.rollback()
+            return False, "That registration request is no longer pending."
+
+        requested_name = clean_requested_player_name(edited_player_name or row["player_name"])
+        player_name = canonical_known_player_name(requested_name) or requested_name
+        if action == "approve" and not player_name:
+            conn.rollback()
+            return False, "Enter a player name before approving."
+
+        if action == "approve":
+            existing_claim = conn.execute(
+                """
+                SELECT id FROM user_accounts
+                WHERE player_name = ? COLLATE NOCASE
+                  AND claim_status = 'approved'
+                  AND id != ?
+                """,
+                (player_name, int(row["user_account_id"])),
+            ).fetchone()
+            if existing_claim:
+                conn.rollback()
+                return False, "That player profile is already claimed by another account."
+
+            conn.execute(
+                """
+                INSERT INTO member_profiles (
+                    member_name, is_member, profile_image,
+                    first_seen_at, last_seen_at, updated_at
+                ) VALUES (?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(member_name) DO UPDATE SET
+                    profile_image = CASE
+                        WHEN excluded.profile_image != '' THEN excluded.profile_image
+                        ELSE member_profiles.profile_image
+                    END,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (player_name, row["profile_image"]),
+            )
+
+            registration_state = load_registration_state_with_conn(conn)
+            state_row = conn.execute(
+                "SELECT left_slots, right_slots FROM app_state WHERE id = ?",
+                (APP_STATE_ID,),
+            ).fetchone()
+            active_names = []
+            if state_row:
+                active_names = (
+                    json_loads_or_default(state_row["left_slots"], [])
+                    + json_loads_or_default(state_row["right_slots"], [])
+                )
+            target_field = "late_players" if any(active_names) else "new_players"
+            entries = parse_textarea(registration_state.get(target_field, ""))
+            if player_name.casefold() not in {entry.casefold() for entry in entries}:
+                entries.append(player_name)
+            save_registration_state_with_conn(
+                conn,
+                {target_field: "\n".join(entries)},
+                f"executive-request-{request_id}",
+            )
+            conn.execute(
+                """
+                UPDATE user_accounts
+                SET player_name = ?, claim_status = 'approved'
+                WHERE id = ?
+                """,
+                (player_name, int(row["user_account_id"])),
+            )
+
+        conn.execute(
+            """
+            UPDATE player_registration_requests
+            SET player_name = ?, status = ?, resolved_at = CURRENT_TIMESTAMP,
+                resolved_by_username = ?
+            WHERE id = ?
+            """,
+            (
+                player_name or row["player_name"],
+                "approved" if action == "approve" else "rejected",
+                str(executive_username or ""),
+                int(request_id),
+            ),
+        )
+        conn.commit()
+    return True, "Registration approved and added to the registration page." if action == "approve" else "Registration request rejected."
 
 
 def get_executive_user(username):
@@ -507,10 +783,12 @@ def create_executive_request(email, password, player_name, role):
     if len(password or "") < 8:
         return False, "Use a password with at least 8 characters."
 
-    canonical_player_name = canonical_known_player_name(player_name)
-
-    if not canonical_player_name:
-        return False, "Choose your known player name from the list."
+    requested_player_name = clean_requested_player_name(player_name)
+    if not requested_player_name:
+        return False, "Choose a known player or enter the executive's name."
+    canonical_player_name = (
+        canonical_known_player_name(requested_player_name) or requested_player_name
+    )
 
     clean_role = clean_executive_role(role)
 
@@ -578,6 +856,15 @@ def resolve_executive_request(request_id, action, resolver_username):
             ).fetchone():
                 return False, "An account already exists for that email."
 
+            conn.execute(
+                """
+                INSERT INTO member_profiles (
+                    member_name, is_member, first_seen_at, last_seen_at, updated_at
+                ) VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(member_name) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                """,
+                (request_row["player_name"],),
+            )
             conn.execute(
                 """
                 INSERT INTO executive_users (
@@ -921,6 +1208,7 @@ def ensure_bracket_settings_schema(conn):
             qr_name_position TEXT NOT NULL DEFAULT 'above',
             qr_color TEXT NOT NULL DEFAULT '#ffffff',
             qr_background_color TEXT NOT NULL DEFAULT '#000000',
+            logo_filename TEXT NOT NULL DEFAULT 'logo.png',
             version INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -932,6 +1220,9 @@ def ensure_bracket_settings_schema(conn):
 
     if "version" not in columns:
         conn.execute("ALTER TABLE bracket_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
+
+    if "logo_filename" not in columns:
+        conn.execute("ALTER TABLE bracket_settings ADD COLUMN logo_filename TEXT NOT NULL DEFAULT 'logo.png'")
 
     qr_columns = {
         "qr_page_name": "TEXT NOT NULL DEFAULT ''",
@@ -950,8 +1241,8 @@ def ensure_bracket_settings_schema(conn):
             id, highlight_color, remove_hover_color,
             table_badge_background, table_badge_text,
             qr_page_name, qr_link, qr_name_position, qr_color,
-            qr_background_color, version, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            qr_background_color, logo_filename, version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
         """,
         (
             BRACKET_SETTINGS_ID,
@@ -964,6 +1255,7 @@ def ensure_bracket_settings_schema(conn):
             DEFAULT_BRACKET_SETTINGS["qr_name_position"],
             DEFAULT_BRACKET_SETTINGS["qr_color"],
             DEFAULT_BRACKET_SETTINGS["qr_background_color"],
+            DEFAULT_BRACKET_SETTINGS["logo_filename"],
         )
     )
 
@@ -1090,6 +1382,7 @@ def create_app_state_table(conn):
             active_tables TEXT NOT NULL DEFAULT '{}',
             replacement_slots TEXT NOT NULL,
             champion TEXT NOT NULL DEFAULT '',
+            placements TEXT NOT NULL DEFAULT '{}',
             round_robin_scores TEXT NOT NULL DEFAULT '{}',
             late_players INTEGER NOT NULL DEFAULT 0,
             buybacks INTEGER NOT NULL DEFAULT 0,
@@ -1114,9 +1407,9 @@ def save_state_with_conn(conn, state):
         """
         INSERT INTO app_state (
             id, left_slots, right_slots, advancements, active_matches,
-            active_tables, replacement_slots, champion, round_robin_scores,
-            late_players, buybacks, state_version, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            active_tables, replacement_slots, champion, placements,
+            round_robin_scores, late_players, buybacks, state_version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
         ON CONFLICT(id) DO UPDATE SET
             left_slots = excluded.left_slots,
             right_slots = excluded.right_slots,
@@ -1125,6 +1418,7 @@ def save_state_with_conn(conn, state):
             active_tables = excluded.active_tables,
             replacement_slots = excluded.replacement_slots,
             champion = excluded.champion,
+            placements = excluded.placements,
             round_robin_scores = excluded.round_robin_scores,
             late_players = excluded.late_players,
             buybacks = excluded.buybacks,
@@ -1140,6 +1434,7 @@ def save_state_with_conn(conn, state):
             json_dumps_compact(state.get("active_tables", {})),
             json_dumps_compact(state.get("replacement_slots", [])),
             state.get("champion", ""),
+            json_dumps_compact(state.get("placements", {})),
             json_dumps_compact(state.get("round_robin_scores", {})),
             int(counts.get("late_players", 0)),
             int(counts.get("buybacks", 0)),
@@ -1168,6 +1463,9 @@ def ensure_app_state_schema(conn):
 
         if "round_robin_scores" not in columns:
             conn.execute("ALTER TABLE app_state ADD COLUMN round_robin_scores TEXT NOT NULL DEFAULT '{}'")
+
+        if "placements" not in columns:
+            conn.execute("ALTER TABLE app_state ADD COLUMN placements TEXT NOT NULL DEFAULT '{}'")
 
         if "active_tables" not in columns:
             conn.execute("ALTER TABLE app_state ADD COLUMN active_tables TEXT NOT NULL DEFAULT '{}'")
@@ -1244,39 +1542,105 @@ def ensure_players_exist(names):
         conn.commit()
 
 
-def load_members():
-    if os.path.exists(MEMBERS_FILE):
+def legacy_name_list(path, fallback=None):
+    if os.path.exists(path):
         try:
-            with open(MEMBERS_FILE, "r", encoding="utf-8") as f:
-                stored_members = json.load(f)
-
-            if isinstance(stored_members, list):
-                return [
-                    str(name).strip()
-                    for name in stored_members
-                    if str(name).strip()
-                ]
-        except json.JSONDecodeError:
+            with open(path, "r", encoding="utf-8") as f:
+                stored_names = json.load(f)
+            if isinstance(stored_names, list):
+                return [str(name).strip() for name in stored_names if str(name).strip()]
+        except (OSError, json.JSONDecodeError):
             pass
+    return list(fallback or [])
 
-    return list(default_members)
+
+def ensure_member_profiles_schema(conn):
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(member_profiles)")
+    }
+    additions = {
+        "is_member": "INTEGER NOT NULL DEFAULT 0",
+        "first_seen_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "last_seen_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    }
+    for column, definition in additions.items():
+        if column not in columns:
+            # SQLite cannot add a column with CURRENT_TIMESTAMP as its default.
+            safe_definition = definition.replace(" DEFAULT CURRENT_TIMESTAMP", " DEFAULT ''")
+            conn.execute(f"ALTER TABLE member_profiles ADD COLUMN {column} {safe_definition}")
+    conn.execute(
+        """
+        UPDATE member_profiles
+        SET first_seen_at = COALESCE(NULLIF(first_seen_at, ''), updated_at, CURRENT_TIMESTAMP),
+            last_seen_at = COALESCE(NULLIF(last_seen_at, ''), updated_at, CURRENT_TIMESTAMP)
+        WHERE first_seen_at = '' OR last_seen_at = ''
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def migrate_known_players_to_profiles(conn):
+    migration_name = "known_players_json_to_member_profiles_v1"
+    if conn.execute(
+        "SELECT 1 FROM data_migrations WHERE name = ?", (migration_name,)
+    ).fetchone():
+        return
+
+    members = legacy_name_list(MEMBERS_FILE, default_members)
+    known_players = legacy_name_list(KNOWN_PLAYERS_FILE)
+    member_keys = {name.casefold() for name in members}
+    seen = set()
+    for value in members + known_players:
+        name = str(value or "").strip()
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        conn.execute(
+            """
+            INSERT INTO member_profiles (
+                member_name, is_member, first_seen_at, last_seen_at, updated_at
+            ) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(member_name) DO UPDATE SET
+                is_member = MAX(member_profiles.is_member, excluded.is_member),
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (name, int(key in member_keys)),
+        )
+    conn.execute("INSERT INTO data_migrations (name) VALUES (?)", (migration_name,))
+
+
+def load_members():
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            "SELECT member_name FROM member_profiles WHERE is_member = 1 ORDER BY member_name COLLATE NOCASE"
+        ).fetchall()
+    return [row["member_name"] for row in rows]
 
 
 def save_members(members):
-    clean_members = []
-    seen_members = set()
-
-    for member in members:
-        name = str(member or "").strip()
-        key = name.casefold()
-
-        if name and key not in seen_members:
-            clean_members.append(name)
-            seen_members.add(key)
-
-    with open(MEMBERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(clean_members, f, indent=2)
-
+    clean_members = sort_names(unique_names(members))
+    with closing(get_db()) as conn:
+        conn.execute("UPDATE member_profiles SET is_member = 0 WHERE is_member = 1")
+        for name in clean_members:
+            conn.execute(
+                """
+                INSERT INTO member_profiles (member_name, is_member)
+                VALUES (?, 1)
+                ON CONFLICT(member_name) DO UPDATE SET
+                    is_member = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (name,),
+            )
+        conn.commit()
     return clean_members
 
 
@@ -1334,21 +1698,11 @@ def sort_names(names):
 
 
 def load_known_player_names():
-    known_names = []
-
-    if os.path.exists(KNOWN_PLAYERS_FILE):
-        try:
-            with open(KNOWN_PLAYERS_FILE, "r", encoding="utf-8") as f:
-                stored_known_players = json.load(f)
-
-            if isinstance(stored_known_players, list):
-                known_names.extend(stored_known_players)
-        except json.JSONDecodeError:
-            pass
-
-    known_names.extend(load_members())
-
-    return sort_names(unique_names(known_names))
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            "SELECT member_name FROM member_profiles ORDER BY member_name COLLATE NOCASE"
+        ).fetchall()
+    return [row["member_name"] for row in rows]
 
 
 def canonical_known_player_name(value):
@@ -1368,16 +1722,44 @@ def canonical_known_player_name(value):
 
 def save_known_player_names(names):
     clean_names = sort_names(unique_names(names))
-
-    with open(KNOWN_PLAYERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(clean_names, f, indent=2)
-
+    keep_keys = {name.casefold() for name in clean_names}
+    with closing(get_db()) as conn:
+        existing_rows = conn.execute(
+            "SELECT member_name, is_member FROM member_profiles"
+        ).fetchall()
+        for name in clean_names:
+            conn.execute(
+                """
+                INSERT INTO member_profiles (member_name, is_member)
+                VALUES (?, 0)
+                ON CONFLICT(member_name) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                """,
+                (name,),
+            )
+        for row in existing_rows:
+            if not row["is_member"] and row["member_name"].casefold() not in keep_keys:
+                conn.execute("DELETE FROM member_profiles WHERE member_name = ?", (row["member_name"],))
+        conn.commit()
     return clean_names
 
 
 def add_known_players(names):
-    existing = load_known_player_names()
-    return save_known_player_names(existing + list(names))
+    clean_names = sort_names(unique_names(names))
+    with closing(get_db()) as conn:
+        for name in clean_names:
+            conn.execute(
+                """
+                INSERT INTO member_profiles (
+                    member_name, is_member, first_seen_at, last_seen_at, updated_at
+                ) VALUES (?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(member_name) DO UPDATE SET
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (name,),
+            )
+        conn.commit()
+    return load_known_player_names()
 
 
 def get_known_players():
@@ -1409,8 +1791,8 @@ def load_state():
         row = conn.execute(
             """
             SELECT left_slots, right_slots, advancements, active_matches,
-                   active_tables, replacement_slots, champion, late_players,
-                   buybacks, round_robin_scores, state_version
+                   active_tables, replacement_slots, champion, placements,
+                   late_players, buybacks, round_robin_scores, state_version
             FROM app_state
             WHERE id = ?
             """,
@@ -1426,6 +1808,7 @@ def load_state():
             "active_tables": json_loads_or_default(row["active_tables"], {}),
             "replacement_slots": json_loads_or_default(row["replacement_slots"], []),
             "champion": row["champion"] or "",
+            "placements": json_loads_or_default(row["placements"], {}),
             "round_robin_scores": json_loads_or_default(row["round_robin_scores"], {}),
             "_version": int(row["state_version"] or 0),
             "counts": {
@@ -1453,6 +1836,247 @@ def save_state(state):
         conn.commit()
 
 
+def clean_logo_filename(value):
+    filename = os.path.basename(str(value or "").strip())
+    if filename == "logo.png" or re.fullmatch(
+        r"competition-logo(?:-[0-9a-f]{16})?\.(?:png|jpg|gif|webp)",
+        filename,
+    ):
+        return filename
+    return DEFAULT_BRACKET_SETTINGS["logo_filename"]
+
+
+def available_competition_logos():
+    logos = []
+    try:
+        filenames = os.listdir(ASSETS_DIR)
+    except OSError:
+        filenames = []
+
+    for filename in filenames:
+        clean_filename = clean_logo_filename(filename)
+        if clean_filename != filename:
+            continue
+
+        path = os.path.join(ASSETS_DIR, filename)
+        if not os.path.isfile(path):
+            continue
+
+        try:
+            modified_at = os.path.getmtime(path)
+        except OSError:
+            modified_at = 0
+
+        logos.append({
+            "filename": filename,
+            "label": "Default logo" if filename == "logo.png" else "Uploaded logo",
+            "modified_at": modified_at,
+            "modified_label": (
+                dt.datetime.fromtimestamp(modified_at).strftime("%d %b %Y, %H:%M")
+                if modified_at else "Date unavailable"
+            ),
+        })
+
+    return sorted(
+        logos,
+        key=lambda logo: (logo["filename"] != "logo.png", logo["modified_at"]),
+        reverse=True,
+    )
+
+
+def competition_logo_exists(filename):
+    clean_filename = clean_logo_filename(filename)
+    return (
+        clean_filename == filename
+        and os.path.isfile(os.path.join(ASSETS_DIR, clean_filename))
+    )
+
+
+def save_competition_logo(upload):
+    data = upload.read(COMPETITION_LOGO_MAX_BYTES + 1)
+    if not data:
+        return False, "Choose a logo image to upload."
+    if len(data) > COMPETITION_LOGO_MAX_BYTES:
+        return False, "The logo must be 5 MB or smaller."
+
+    extension = next(
+        (ext for signature, ext in COMPETITION_LOGO_SIGNATURES if data.startswith(signature)),
+        None,
+    )
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        extension = "webp"
+    if not extension:
+        return False, "Upload a PNG, JPEG, WebP, or GIF image."
+
+    # Use a new filename for every upload. On Windows, OneDrive or a browser
+    # request can briefly hold the current image open and prevent os.replace.
+    filename = f"competition-logo-{secrets.token_hex(8)}.{extension}"
+    destination = os.path.join(ASSETS_DIR, filename)
+    try:
+        with open(destination, "xb") as output:
+            output.write(data)
+    except OSError:
+        return False, "The logo could not be saved. Check that the app can write to its assets folder."
+    return True, filename
+
+
+def canonical_member_name(value):
+    key = str(value or "").strip().casefold()
+    return next((name for name in load_known_player_names() if name.casefold() == key), "")
+
+
+def load_member_profile(member_name):
+    member_name = canonical_member_name(member_name)
+    profile = {
+        "member_name": member_name,
+        "is_member": False,
+        "profile_image": "",
+        "instagram": "",
+        "phone": "",
+        "email": "",
+        "notes": "",
+    }
+    if not member_name:
+        return profile
+
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT member_name, is_member, profile_image, instagram, phone, email, notes,
+                   first_seen_at, last_seen_at
+            FROM member_profiles
+            WHERE member_name = ?
+            """,
+            (member_name,),
+        ).fetchone()
+    if row:
+        profile.update(dict(row))
+    return profile
+
+
+def save_member_profile(member_name, profile_image, instagram, phone, email, notes):
+    member_name = canonical_member_name(member_name)
+    if not member_name:
+        return False, "Choose a known player."
+
+    email = str(email or "").strip()[:254]
+    if email and not clean_email(email):
+        return False, "Enter a valid email address or leave it blank."
+
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO member_profiles (
+                member_name, profile_image, instagram, phone, email, notes, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(member_name) DO UPDATE SET
+                profile_image = excluded.profile_image,
+                instagram = excluded.instagram,
+                phone = excluded.phone,
+                email = excluded.email,
+                notes = excluded.notes,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                member_name,
+                str(profile_image or "")[:240],
+                str(instagram or "").strip()[:240],
+                str(phone or "").strip()[:80],
+                email,
+                str(notes or "").strip()[:2000],
+            ),
+        )
+        conn.commit()
+    return True, member_name
+
+
+def read_only_profiles_for_game_player(display_name):
+    display_parts = comp_entry_players(clean_player_name(display_name))
+    if not display_parts:
+        return []
+
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT member_name, is_member, profile_image, instagram, phone, email,
+                   notes, first_seen_at, last_seen_at
+            FROM member_profiles
+            ORDER BY member_name COLLATE NOCASE
+            """
+        ).fetchall()
+
+    profiles = []
+    for display_part in display_parts:
+        alias = clean_player_name(display_part).casefold()
+        candidates = []
+        for row in rows:
+            full_name = row["member_name"]
+            aliases = {
+                full_name.casefold(),
+                shorten_name(full_name).casefold(),
+            }
+            # Team names are displayed using first names only.
+            if len(display_parts) > 1:
+                aliases.add(first_name(full_name).casefold())
+            if alias in aliases:
+                candidates.append(row)
+
+        if len(candidates) != 1:
+            profiles.append({
+                "display_name": display_part,
+                "found": False,
+                "message": (
+                    "More than one known player matches this bracket name."
+                    if len(candidates) > 1
+                    else "No known-player profile was found."
+                ),
+            })
+            continue
+
+        row = candidates[0]
+        profiles.append({
+            "display_name": display_part,
+            "found": True,
+            "name": row["member_name"],
+            "is_member": bool(row["is_member"]),
+            "profile_image": row["profile_image"],
+            "instagram": row["instagram"],
+            "phone": row["phone"],
+            "email": row["email"],
+            "notes": row["notes"],
+            "first_seen_at": row["first_seen_at"],
+            "last_seen_at": row["last_seen_at"],
+        })
+    return profiles
+
+
+def save_member_profile_image(upload):
+    data = upload.read(COMPETITION_LOGO_MAX_BYTES + 1)
+    if not data:
+        return False, "Choose a profile image to upload."
+    if len(data) > COMPETITION_LOGO_MAX_BYTES:
+        return False, "The profile image must be 5 MB or smaller."
+
+    extension = next(
+        (ext for signature, ext in COMPETITION_LOGO_SIGNATURES if data.startswith(signature)),
+        None,
+    )
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        extension = "webp"
+    if not extension:
+        return False, "Upload a PNG, JPEG, WebP, or GIF image."
+
+    directory = os.path.join(ASSETS_DIR, "member-profiles")
+    filename = f"member-profile-{secrets.token_hex(8)}.{extension}"
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, filename), "xb") as output:
+            output.write(data)
+    except OSError:
+        return False, "The profile image could not be saved."
+    return True, f"member-profiles/{filename}"
+
+
 def load_bracket_settings():
     with closing(get_db()) as conn:
         ensure_bracket_settings_schema(conn)
@@ -1461,7 +2085,7 @@ def load_bracket_settings():
             SELECT highlight_color, remove_hover_color,
                    table_badge_background, table_badge_text,
                    qr_page_name, qr_link, qr_name_position, qr_color,
-                   qr_background_color, version
+                   qr_background_color, logo_filename, version
             FROM bracket_settings
             WHERE id = ?
             """,
@@ -1471,9 +2095,8 @@ def load_bracket_settings():
     settings = dict(DEFAULT_BRACKET_SETTINGS)
 
     if row:
-        for key, fallback in DEFAULT_BRACKET_SETTINGS.items():
-            if key.startswith("qr_"):
-                continue
+        for key in BRACKET_COLOR_SETTING_KEYS:
+            fallback = DEFAULT_BRACKET_SETTINGS[key]
             settings[key] = clean_css_color(row[key], fallback)
         settings["qr_page_name"] = str(row["qr_page_name"] or "")[:120]
         settings["qr_link"] = str(row["qr_link"] or "")[:2000]
@@ -1482,6 +2105,7 @@ def load_bracket_settings():
         settings["qr_background_color"] = clean_css_color(
             row["qr_background_color"], DEFAULT_BRACKET_SETTINGS["qr_background_color"]
         )
+        settings["logo_filename"] = clean_logo_filename(row["logo_filename"])
         settings["_version"] = int(row["version"] or 0)
     else:
         settings["_version"] = 0
@@ -1489,11 +2113,11 @@ def load_bracket_settings():
     return settings
 
 
-def save_bracket_settings(form):
+def save_bracket_settings(form, logo_filename=None):
     values = {
         key: clean_css_color(form.get(key), fallback)
         for key, fallback in DEFAULT_BRACKET_SETTINGS.items()
-        if not key.startswith("qr_")
+        if key in BRACKET_COLOR_SETTING_KEYS
     }
     values["qr_page_name"] = str(form.get("qr_page_name", "")).strip()[:120]
     values["qr_link"] = str(form.get("qr_link", "")).strip()[:2000]
@@ -1505,6 +2129,13 @@ def save_bracket_settings(form):
 
     with closing(get_db()) as conn:
         ensure_bracket_settings_schema(conn)
+        if logo_filename is None:
+            row = conn.execute(
+                "SELECT logo_filename FROM bracket_settings WHERE id = ?",
+                (BRACKET_SETTINGS_ID,),
+            ).fetchone()
+            logo_filename = row["logo_filename"] if row else DEFAULT_BRACKET_SETTINGS["logo_filename"]
+        values["logo_filename"] = clean_logo_filename(logo_filename)
         conn.execute(
             """
             UPDATE bracket_settings
@@ -1517,6 +2148,7 @@ def save_bracket_settings(form):
                 qr_name_position = ?,
                 qr_color = ?,
                 qr_background_color = ?,
+                logo_filename = ?,
                 version = version + 1,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -1531,6 +2163,7 @@ def save_bracket_settings(form):
                 values["qr_name_position"],
                 values["qr_color"],
                 values["qr_background_color"],
+                values["logo_filename"],
                 BRACKET_SETTINGS_ID,
             )
         )
@@ -1924,11 +2557,13 @@ def player_names_from_entries(entries):
 
 
 def known_player_names_from_entries(entries):
-    return [
-        name
-        for name in (clean_known_player_name(entry) for entry in entries)
-        if name
-    ]
+    names = []
+    for entry in entries:
+        for player in split_team_players(entry):
+            name = clean_known_player_name(player)
+            if name:
+                names.append(name)
+    return names
 
 
 def parse_textarea(text):
@@ -1953,6 +2588,7 @@ def empty_state():
         "active_tables": {},
         "replacement_slots": [],
         "champion": "",
+        "placements": {},
         "round_robin_scores": {},
         "counts": {
             "late_players": 0,
@@ -1974,6 +2610,9 @@ def normalize_state(state):
         state["active_tables"] = {}
     state.setdefault("replacement_slots", [])
     state.setdefault("champion", "")
+    state.setdefault("placements", {})
+    if not isinstance(state["placements"], dict):
+        state["placements"] = {}
     state.setdefault("round_robin_scores", {})
     if not isinstance(state["round_robin_scores"], dict):
         state["round_robin_scores"] = {}
@@ -2253,6 +2892,19 @@ def automatic_winners_from_round_robin(state=None):
     }, False
 
 
+def automatic_winners_from_knockout(state=None):
+    state = normalize_state(state or load_state() or empty_state())
+    if not knockout_final_config(state):
+        return {}
+
+    placements = state.get("placements", {})
+    winners = {
+        str(place): str(placements.get(str(place), "") or "").strip()
+        for place in PAYOUT_PLACES
+    }
+    return winners if all(winners.values()) else {}
+
+
 def payout_rows_for_round_robin_tie(winners, prizes, entries=None, comp_date=None):
     split_amount = round(
         sum(clean_money_value(prizes.get(place, 0)) for place in PAYOUT_PLACES) / 3,
@@ -2486,6 +3138,7 @@ def finance_summary():
     comp_size, payout_mode, prizes = payout_prizes_for_state(finance_state, players)
     comp_date = clean_date_key(finance_state.get("comp_date"))
     automatic_winners, round_robin_three_way_tie = automatic_winners_from_round_robin(state)
+    automatic_winners = automatic_winners or automatic_winners_from_knockout(state)
     winners = automatic_winners or clean_winner_map(finance_state.get("winners"))
     active_keys = {player["key"] for player in players}
     payments = {
@@ -3017,6 +3670,37 @@ def is_final_match_id(match_id):
     return str(match_id or "") == "F-0-0"
 
 
+def is_third_place_match_id(match_id):
+    return str(match_id or "") == THIRD_PLACE_MATCH_ID
+
+
+def knockout_final_config(state):
+    state = normalize_state(state)
+    player_count = sum(
+        1
+        for name in state.get("left", []) + state.get("right", [])
+        if str(name or "").strip()
+    )
+
+    if player_count == 32:
+        return {
+            "size": 32,
+            "semifinal_ids": ["L-3-0", "L-3-2"],
+            "semifinal_round": 3,
+            "championship_id": "L-4-0",
+        }
+
+    if player_count == 64:
+        return {
+            "size": 64,
+            "semifinal_ids": ["L-4-0", "R-4-0"],
+            "semifinal_round": 4,
+            "championship_id": "F-0-0",
+        }
+
+    return None
+
+
 def match_slot_ids(match_id):
     if is_final_match_id(match_id):
         return ["L-5-0", "R-5-0"]
@@ -3198,14 +3882,27 @@ def game_from_match_id(state, match_id):
 
     player_names = [slot_name(state, slot_id) for slot_id in slot_ids]
     target_slot_id = match_target_slot_id(match_id)
-    winner_name = state.get("champion", "") if target_slot_id == "champion" else slot_name(state, target_slot_id)
+    knockout = knockout_final_config(state)
+    is_championship = bool(knockout and match_id == knockout["championship_id"])
+    winner_name = (
+        state.get("placements", {}).get("1", "") or state.get("champion", "")
+        if is_championship
+        else state.get("champion", "") if target_slot_id == "champion"
+        else slot_name(state, target_slot_id)
+    )
     parsed = parse_side_match_id(match_id)
-    round_key = "final" if is_final_match_id(match_id) else parsed[1]
+    round_key = "final" if is_final_match_id(match_id) or is_championship else parsed[1]
+    round_label = GAME_ROUND_LABELS[round_key]
+
+    if knockout and match_id in knockout["semifinal_ids"]:
+        round_label = "Semi Final"
+    elif is_championship:
+        round_label = "Single Elimination Knockout"
 
     return {
         "id": match_id,
         "round_key": round_key,
-        "round_label": GAME_ROUND_LABELS[round_key],
+        "round_label": round_label,
         "slot_ids": slot_ids,
         "players": [
             {"slot_id": slot_ids[0], "name": player_names[0]},
@@ -3217,6 +3914,100 @@ def game_from_match_id(state, match_id):
         "table_number": state.get("active_tables", {}).get(match_id),
         "ready": all(str(name or "").strip() for name in player_names),
         "has_players": any(str(name or "").strip() for name in player_names),
+    }
+
+
+def third_place_game_for_state(state):
+    state = normalize_state(state)
+    knockout = knockout_final_config(state)
+
+    if not knockout:
+        return None
+
+    losers = []
+    for semifinal_id in knockout["semifinal_ids"]:
+        semifinal = game_from_match_id(state, semifinal_id)
+        if not semifinal or not semifinal["played"]:
+            return None
+
+        loser_name = next(
+            (
+                player["name"]
+                for player in semifinal["players"]
+                if player["name"] and player["name"] != semifinal["winner_name"]
+            ),
+            "",
+        )
+        if not loser_name:
+            return None
+        losers.append(loser_name)
+
+    placements = state.get("placements", {})
+    return {
+        "id": THIRD_PLACE_MATCH_ID,
+        "round_key": "third_place",
+        "round_label": "3rd Place Playoffs",
+        "slot_ids": ["P-3-0", "P-3-1"],
+        "players": [
+            {"slot_id": "P-3-0", "name": losers[0]},
+            {"slot_id": "P-3-1", "name": losers[1]},
+        ],
+        "winner_name": placements.get("3", ""),
+        "played": bool(str(placements.get("3", "") or "").strip()),
+        "active": THIRD_PLACE_MATCH_ID in state.get("active_matches", []),
+        "table_number": state.get("active_tables", {}).get(THIRD_PLACE_MATCH_ID),
+        "ready": True,
+        "has_players": True,
+    }
+
+
+def knockout_finals_scoreboard_for_state(state):
+    state = normalize_state(state)
+    knockout = knockout_final_config(state)
+    third_place_game = third_place_game_for_state(state)
+
+    if not knockout or not third_place_game:
+        return None
+
+    championship_game = game_from_match_id(state, knockout["championship_id"])
+    if not championship_game or not championship_game["ready"]:
+        return None
+
+    placements = state.get("placements", {})
+    games = []
+
+    for game, label, winner_place, loser_place in (
+        (championship_game, "Single Elimination Knockout", "1st", "2nd"),
+        (third_place_game, "3rd Place Playoffs", "3rd", "4th"),
+    ):
+        players = []
+        for player in game["players"]:
+            place = ""
+            if game["played"]:
+                place = winner_place if player["name"] == game["winner_name"] else loser_place
+            players.append({
+                "name": player["name"],
+                "place": place,
+                "winner": bool(game["played"] and player["name"] == game["winner_name"]),
+            })
+
+        games.append({
+            "id": game["id"],
+            "label": label,
+            "players": players,
+            "played": game["played"],
+            "active": game["active"],
+            "table_number": game.get("table_number"),
+        })
+
+    return {
+        "active": True,
+        "type": "knockout",
+        "title": "Finals",
+        "played": sum(1 for game in games if game["played"]),
+        "total": 2,
+        "games": games,
+        "placements": placements,
     }
 
 
@@ -3240,6 +4031,11 @@ def prior_rounds_are_complete(state, round_index):
 
 def detected_round_robin_final(state):
     state = normalize_state(state)
+
+    # Full 32- and 64-player fields use knockout semifinals, a championship
+    # match, and a separate third-place playoff instead of a round robin.
+    if knockout_final_config(state):
+        return None
 
     for round_index in range(1, 5):
         participants = round_participants(state, round_index)
@@ -3572,12 +4368,36 @@ def all_game_groups_for_state(state):
         ]
 
         if games:
+            knockout = knockout_final_config(state)
+            is_knockout_semifinal_group = bool(
+                knockout and round_key == knockout["semifinal_round"]
+            )
+            is_knockout_championship_group = bool(
+                knockout and round_key == "final"
+            )
             groups.append({
                 "key": str(round_key),
-                "label": GAME_ROUND_LABELS[round_key],
-                "short_label": GAME_ROUND_SHORT_LABELS[round_key],
+                "label": (
+                    "Semi Final" if is_knockout_semifinal_group
+                    else "Single Elimination Knockout" if is_knockout_championship_group
+                    else GAME_ROUND_LABELS[round_key]
+                ),
+                "short_label": (
+                    "Semi" if is_knockout_semifinal_group
+                    else "Knockout" if is_knockout_championship_group
+                    else GAME_ROUND_SHORT_LABELS[round_key]
+                ),
                 "games": games,
             })
+
+    third_place_game = third_place_game_for_state(state)
+    if third_place_game:
+        groups.append({
+            "key": "third_place",
+            "label": "3rd Place Playoffs",
+            "short_label": "3rd Playoffs",
+            "games": [third_place_game],
+        })
 
     return groups
 
@@ -3618,6 +4438,9 @@ def games_for_state(state):
 def game_for_match_id(state, match_id):
     if is_round_robin_match_id(match_id):
         return round_robin_game_from_match_id(state, match_id)
+
+    if is_third_place_match_id(match_id):
+        return third_place_game_for_state(state)
 
     return game_from_match_id(state, match_id)
 
@@ -3765,6 +4588,9 @@ def win_game_in_state(state, match_id, winner_slot_id):
     if not success:
         return False, result
 
+    knockout = knockout_final_config(state)
+    state.setdefault("placements", {})
+
     if is_round_robin_match_id(match_id):
         detection = detected_round_robin_final(state)
 
@@ -3773,7 +4599,14 @@ def win_game_in_state(state, match_id, winner_slot_id):
 
     target_slot_id = match_target_slot_id(match_id)
 
-    if target_slot_id == "champion":
+    if is_third_place_match_id(match_id):
+        state["placements"]["3"] = winner_name
+        state["placements"]["4"] = loser_name
+    elif knockout and match_id == knockout["championship_id"]:
+        state["champion"] = winner_name
+        state["placements"]["1"] = winner_name
+        state["placements"]["2"] = loser_name
+    elif target_slot_id == "champion":
         state["champion"] = winner_name
     elif target_slot_id:
         state.setdefault("advancements", {})
@@ -3807,6 +4640,19 @@ def reset_game_in_state(state, match_id):
 
         return False, "Game was not found"
 
+    if is_third_place_match_id(match_id):
+        undo_match_results_for_match_ids([match_id])
+        state.setdefault("placements", {})["3"] = ""
+        state["placements"]["4"] = ""
+        normalize_active_tables(state)
+        state["active_matches"] = [
+            active_match_id
+            for active_match_id in state["active_matches"]
+            if active_match_id != match_id
+        ]
+        state["active_tables"].pop(match_id, None)
+        return True, state
+
     if is_round_robin_match_id(match_id):
         detection = detected_round_robin_final(state)
         winner_slot_id = next(
@@ -3832,6 +4678,12 @@ def reset_game_in_state(state, match_id):
         return True, state
 
     impacted_match_ids = downstream_match_ids(match_id)
+    knockout = knockout_final_config(state)
+
+    if knockout and match_id in knockout["semifinal_ids"]:
+        impacted_match_ids.append(THIRD_PLACE_MATCH_ID)
+
+    impacted_match_ids = list(dict.fromkeys(impacted_match_ids))
     round_robin = detected_round_robin_final(state)
     parsed_match = parse_side_match_id(match_id)
 
@@ -3861,6 +4713,16 @@ def reset_game_in_state(state, match_id):
             state["champion"] = ""
         elif target_slot_id:
             state["advancements"][target_slot_id] = ""
+
+    if knockout:
+        state.setdefault("placements", {})
+        if match_id in knockout["semifinal_ids"]:
+            state["placements"] = {}
+            state["champion"] = ""
+        elif match_id == knockout["championship_id"]:
+            state["placements"]["1"] = ""
+            state["placements"]["2"] = ""
+            state["champion"] = ""
 
     return True, state
 
@@ -3940,6 +4802,44 @@ def landing():
     )
 
 
+@app.route("/guest_registrations")
+def guest_registrations():
+    state = normalize_state(load_state() or empty_state())
+    registration_state = load_registration_state()
+    active_players = active_comp_players(state)
+    member_keys = {name.casefold() for name in load_members()}
+
+    awaiting_players = []
+    for field in REGISTRATION_FIELDS:
+        entries = parse_textarea(registration_state.get(field, ""))
+        for name in player_names_from_entries(entries):
+            clean_name = clean_player_name(name)
+            if not clean_name:
+                continue
+            awaiting_players.append({
+                "name": clean_name,
+                "is_member": clean_name.casefold() in member_keys,
+                "type": (
+                    "Buyback"
+                    if field == "buybacks"
+                    else "Late registration"
+                    if field == "late_players"
+                    else "Registration"
+                ),
+            })
+
+    return render_template(
+        "guest_registrations.html",
+        active_players=active_players,
+        awaiting_players=awaiting_players,
+        competition=competition_context_for_date(),
+        has_active_comp=any(
+            str(name or "").strip()
+            for name in state.get("left", []) + state.get("right", [])
+        ),
+    )
+
+
 @app.route("/assets/<path:filename>")
 def asset_file(filename):
     return send_from_directory(ASSETS_DIR, filename)
@@ -3982,7 +4882,10 @@ def bracket():
         state = normalize_state(state)
 
     normalize_active_tables(state)
-    state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
+    state["round_robin_scoreboard"] = (
+        knockout_finals_scoreboard_for_state(state)
+        or round_robin_scoreboard_for_state(state)
+    )
 
     return render_template(
         "bracket.html",
@@ -4020,10 +4923,24 @@ def user_signup():
     error = ""
 
     if request.method == "POST":
-        success, result = create_user_account(
-            request.form.get("email", ""),
-            request.form.get("password", "")
-        )
+        profile_image = ""
+        image_upload = request.files.get("profile_image")
+        if image_upload and image_upload.filename:
+            image_success, image_result = save_member_profile_image(image_upload)
+            if image_success:
+                profile_image = image_result
+            else:
+                error = image_result
+
+        if not error:
+            success, result = create_user_account(
+                request.form.get("email", ""),
+                request.form.get("password", ""),
+                request.form.get("player_name", ""),
+                profile_image,
+            )
+        else:
+            success, result = False, error
 
         if success:
             user = get_user_account(result)
@@ -4032,7 +4949,17 @@ def user_signup():
 
         error = result
 
-    return render_template("user_signup.html", error=error)
+    return render_template(
+        "user_signup.html",
+        error=error,
+        known_player_names=load_known_player_names(),
+    )
+
+
+@app.route("/user_logout", methods=["POST"])
+def user_logout():
+    session.clear()
+    return redirect(url_for("landing"))
 
 
 @app.route("/executive_login", methods=["GET", "POST"])
@@ -4097,7 +5024,8 @@ def executive_signup():
         success, result = create_executive_request(
             request.form.get("email", ""),
             request.form.get("password", ""),
-            request.form.get("player_name", ""),
+            request.form.get("new_player_name", "").strip()
+            or request.form.get("known_player_name", ""),
             request.form.get("executive_role", EXECUTIVE_ROLES[0])
         )
 
@@ -4158,9 +5086,30 @@ def database_browser(table_name=None):
 def bracket_settings():
     if request.method == "POST":
         if request.form.get("action") == "reset":
-            settings = save_bracket_settings(DEFAULT_BRACKET_SETTINGS)
+            settings = save_bracket_settings(
+                DEFAULT_BRACKET_SETTINGS,
+                DEFAULT_BRACKET_SETTINGS["logo_filename"],
+            )
         else:
-            settings = save_bracket_settings(request.form)
+            logo_filename = None
+            logo_upload = request.files.get("competition_logo")
+            if logo_upload and logo_upload.filename:
+                success, result = save_competition_logo(logo_upload)
+                if not success:
+                    if wants_json_response():
+                        return {"error": result}, 400
+                    return redirect(url_for("bracket_settings", error=result))
+                logo_filename = result
+            else:
+                requested_logo = str(request.form.get("logo_filename", "") or "").strip()
+                if requested_logo:
+                    if not competition_logo_exists(requested_logo):
+                        error = "That saved logo is no longer available."
+                        if wants_json_response():
+                            return {"error": error}, 400
+                        return redirect(url_for("bracket_settings", error=error))
+                    logo_filename = requested_logo
+            settings = save_bracket_settings(request.form, logo_filename)
 
         if wants_json_response():
             return {**settings, "_version": load_bracket_settings().get("_version", 0)}
@@ -4173,8 +5122,10 @@ def bracket_settings():
     return render_template(
         "bracket_settings.html",
         settings=load_bracket_settings(),
+        error=request.args.get("error", ""),
         defaults=DEFAULT_BRACKET_SETTINGS,
         presets=BRACKET_COLOR_PRESETS,
+        logo_history=available_competition_logos(),
         executive_profiles=executive_profiles(),
     )
 
@@ -4183,7 +5134,10 @@ def bracket_settings():
 def bracket_state_route():
     state = normalize_state(load_state() or empty_state())
     normalize_active_tables(state)
-    state["round_robin_scoreboard"] = round_robin_scoreboard_for_state(state)
+    state["round_robin_scoreboard"] = (
+        knockout_finals_scoreboard_for_state(state)
+        or round_robin_scoreboard_for_state(state)
+    )
     state["bracket_settings_version"] = load_bracket_settings().get("_version", 0)
     return state
 
@@ -4218,6 +5172,53 @@ def executive_games():
         bracket_version=state.get("_version", 0),
         executive_profiles=executive_profiles(),
     )
+
+
+@app.route("/registration_requests", methods=["GET", "POST"])
+@executive_login_required
+def player_registration_requests_route():
+    if request.method == "GET":
+        return redirect(url_for("register"))
+
+    if request.method == "POST":
+        try:
+            request_id = int(request.form.get("request_id", ""))
+        except (TypeError, ValueError):
+            return redirect(url_for("register", error="Invalid registration request."))
+        success, result = resolve_player_registration_request(
+            request_id,
+            request.form.get("action", ""),
+            request.form.get("player_name", ""),
+            session.get("executive_username", ""),
+        )
+        return redirect(url_for(
+            "register",
+            **({"message": result} if success else {"error": result}),
+        ))
+
+
+@app.route("/executive_games/<path:match_id>/profiles")
+@executive_login_required
+def game_player_profiles(match_id):
+    state = normalize_state(load_state() or empty_state())
+    game = game_for_match_id(state, match_id)
+    if not game:
+        return {"success": False, "error": "Game was not found."}, 404
+
+    profiles = []
+    for player in game.get("players", []):
+        profiles.extend(read_only_profiles_for_game_player(player.get("name", "")))
+    for profile in profiles:
+        filename = profile.get("profile_image", "")
+        profile["profile_image_url"] = (
+            url_for("asset_file", filename=filename) if filename else ""
+        )
+
+    return {
+        "success": True,
+        "game_id": game.get("display_id") or game.get("id") or match_id,
+        "profiles": profiles,
+    }
 
 
 @app.route("/game_action", methods=["POST"])
@@ -4341,6 +5342,7 @@ def payments():
             for place in PAYOUT_PLACES
         }
         automatic_winners, _ = automatic_winners_from_round_robin(state)
+        automatic_winners = automatic_winners or automatic_winners_from_knockout(state)
 
         if automatic_winners:
             winners = automatic_winners
@@ -4395,8 +5397,26 @@ def payments_pdf():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if request.method == "POST" and not is_executive_logged_in():
-        return redirect(url_for("executive_login", next=url_for("register")))
+    if not is_executive_logged_in():
+        user = current_user_account()
+        if not user:
+            return redirect(url_for("landing", error="Log in to request registration."))
+
+        message = request.args.get("message", "")
+        error = request.args.get("error", "")
+        if request.method == "POST":
+            success, result = create_player_registration_request(user)
+            return redirect(url_for("register", **({"message": result} if success else {"error": result})))
+
+        pending_request = pending_registration_for_account(user["id"])
+        return render_template(
+            "player_register.html",
+            user=dict(user),
+            pending_request=dict(pending_request) if pending_request else None,
+            message=message,
+            error=error,
+            competition=competition_context_for_date(),
+        )
 
     if request.method == "POST":
         action = request.form.get("action")
@@ -4533,6 +5553,9 @@ def register():
         "register.html",
         members=load_members(),
         known_players=get_known_players(),
+        pending_registration_requests=load_player_registration_requests("pending"),
+        registration_request_message=request.args.get("message", ""),
+        registration_request_error=request.args.get("error", ""),
         counts=counts,
         initial_signups=player_names_from_entries(
             parse_textarea(registration_state.get(target_field, ""))
@@ -4540,6 +5563,94 @@ def register():
         registration_state=registration_state,
         rankings=get_rankings(),
         has_initial_comp=counts["total_players"] > 0
+    )
+
+
+@app.route("/dev", methods=["GET", "POST"])
+def developer_page():
+    if not is_developer_logged_in():
+        return redirect(url_for("landing"))
+
+    message = ""
+    error = ""
+    player_count = 64
+    members = load_known_player_names()
+    selected_member = canonical_member_name(
+        request.form.get("member_name") or request.args.get("member")
+    )
+    if not selected_member and members:
+        selected_member = members[0]
+
+    if request.method == "POST" and request.form.get("action") == "add_test_players":
+        try:
+            player_count = int(request.form.get("player_count", ""))
+        except (TypeError, ValueError):
+            player_count = 0
+
+        if not 1 <= player_count <= 64:
+            error = "Choose a player count between 1 and 64."
+        else:
+            players = [
+                f"Test Player {index:02d}"
+                for index in range(1, player_count + 1)
+            ]
+            slots = pad_to_64(players)
+            state = {
+                "left": slots[:32],
+                "right": slots[32:64],
+                "advancements": {},
+                "active_matches": [],
+                "replacement_slots": [],
+                "counts": {
+                    "late_players": 0,
+                    "buybacks": 0,
+                },
+            }
+
+            add_known_players(players)
+            ensure_players_exist(players)
+            save_state(state)
+            save_registration_state({field: "" for field in REGISTRATION_FIELDS})
+            message = f"A fresh competition with {player_count} test players has been created."
+
+    elif request.method == "POST" and request.form.get("action") == "save_member_profile":
+        current_profile = load_member_profile(selected_member)
+        profile_image = current_profile.get("profile_image", "")
+        image_upload = request.files.get("profile_image")
+
+        if image_upload and image_upload.filename:
+            success, result = save_member_profile_image(image_upload)
+            if success:
+                profile_image = result
+            else:
+                error = result
+
+        if not error:
+            success, result = save_member_profile(
+                selected_member,
+                profile_image,
+                request.form.get("instagram", ""),
+                request.form.get("phone", ""),
+                request.form.get("email", ""),
+                request.form.get("notes", ""),
+            )
+            if success:
+                selected_member = result
+                message = f"Saved the unofficial profile for {selected_member}."
+            else:
+                error = result
+
+    member_profile = load_member_profile(selected_member)
+
+    return render_template(
+        "developer.html",
+        message=message,
+        error=error,
+        player_count=player_count if player_count else 64,
+        counts=get_register_counts(),
+        members=members,
+        selected_member=selected_member,
+        member_profile=member_profile,
     )
 
 
@@ -4694,6 +5805,7 @@ def save_bracket_route():
     incoming["counts"] = old_state.get("counts", {"late_players": 0, "buybacks": 0})
     incoming["replacement_slots"] = old_state.get("replacement_slots", [])
     incoming["champion"] = incoming.get("champion", old_state.get("champion", ""))
+    incoming["placements"] = old_state.get("placements", {})
     incoming["round_robin_scores"] = old_state.get("round_robin_scores", {})
     incoming["active_tables"] = old_state.get("active_tables", {})
 

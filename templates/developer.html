@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer Tools</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #080808;
+      color: #f4f4f4;
+      font-family: Arial, sans-serif;
+    }
+    main {
+      width: min(760px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 56px 0;
+    }
+    h1 { margin: 0 0 8px; font-size: 32px; }
+    .subtitle { margin: 0 0 32px; color: #aaa; }
+    .message {
+      margin-bottom: 20px;
+      border: 1px solid #347a42;
+      border-radius: 8px;
+      background: #142619;
+      padding: 14px 16px;
+      color: #bff0c8;
+    }
+    .message.error {
+      border-color: #8d3838;
+      background: #2b1515;
+      color: #ffbdbd;
+    }
+    .card {
+      border: 1px solid #303030;
+      border-radius: 12px;
+      background: #151515;
+      padding: 24px;
+    }
+    .card + .card { margin-top: 20px; }
+    .card h2 { margin: 0 0 10px; font-size: 22px; }
+    .card p { margin: 0 0 18px; color: #bbb; line-height: 1.5; }
+    .status { color: #ffad4d; font-weight: bold; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .player-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    .player-form label { display: grid; gap: 6px; color: #ccc; font-weight: bold; }
+    .player-form input {
+      width: 130px;
+      border: 1px solid #444;
+      border-radius: 7px;
+      background: #090909;
+      color: white;
+      padding: 11px 12px;
+      font: inherit;
+    }
+    button, .link {
+      border: 0;
+      border-radius: 7px;
+      padding: 12px 16px;
+      font: inherit;
+      font-weight: bold;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button { background: #ff7900; color: #050505; }
+    .link { background: #303030; color: white; }
+    .profile-layout {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+    .profile-photo {
+      width: 150px;
+      height: 150px;
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      background: #090909;
+      object-fit: cover;
+    }
+    .profile-photo.empty {
+      display: grid;
+      place-items: center;
+      color: #777;
+      font-size: 12px;
+      text-align: center;
+    }
+    .profile-fields { display: grid; gap: 12px; }
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .profile-fields label, .member-picker {
+      display: grid;
+      gap: 6px;
+      color: #ccc;
+      font-weight: bold;
+    }
+    .profile-fields input, .profile-fields textarea, .member-picker select {
+      width: 100%;
+      border: 1px solid #444;
+      border-radius: 7px;
+      background: #090909;
+      color: white;
+      padding: 11px 12px;
+      font: inherit;
+    }
+    .profile-fields textarea { min-height: 110px; resize: vertical; }
+    .field-hint { color: #888; font-size: 12px; font-weight: normal; }
+    @media (max-width: 600px) {
+      main { width: min(100% - 20px, 760px); padding: 28px 0; }
+      .card { padding: 16px; }
+      .profile-layout { grid-template-columns: 1fr; }
+      .profile-photo { width: 120px; height: 120px; }
+      .profile-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Developer Tools</h1>
+    <p class="subtitle">Private testing controls for rockateeer12@gmail.com.</p>
+
+    {% if message %}<div class="message">{{ message }}</div>{% endif %}
+    {% if error %}<div class="message error">{{ error }}</div>{% endif %}
+
+    <section class="card">
+      <h2>Create a test competition</h2>
+      <p>
+        Choose how many test players to generate and place into a fresh bracket.
+        <span class="status">This replaces the current competition.</span>
+      </p>
+      <div class="actions">
+        <form class="player-form" method="POST" onsubmit="return confirm(`Replace the current competition with ${this.player_count.value} test players?`);">
+          <input type="hidden" name="action" value="add_test_players">
+          <label>
+            Number of players
+            <input name="player_count" type="number" min="1" max="64" step="1" value="{{ player_count }}" required>
+          </label>
+          <button type="submit">Create Test Competition</button>
+        </form>
+        <a class="link" href="{{ url_for('bracket') }}">View Bracket</a>
+        <a class="link" href="{{ url_for('register') }}">Registration</a>
+      </div>
+      <p style="margin-top: 18px; margin-bottom: 0;">Current bracket: {{ counts.total_players }} players</p>
+    </section>
+
+    <section class="card">
+      <h2>Known player profiles</h2>
+      <p>Add optional private profile information for members and other known players.</p>
+
+      {% if members %}
+        <label class="member-picker" style="margin-bottom: 18px;">
+          Known player
+          <select onchange="window.location.href='{{ url_for('developer_page') }}?member=' + encodeURIComponent(this.value)">
+            {% for member in members %}
+              <option value="{{ member }}" {% if member == selected_member %}selected{% endif %}>{{ member }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <form method="POST" enctype="multipart/form-data" class="profile-layout">
+          <input type="hidden" name="action" value="save_member_profile">
+          <input type="hidden" name="member_name" value="{{ selected_member }}">
+
+          <div>
+            {% if member_profile.profile_image %}
+              <img class="profile-photo" src="{{ url_for('asset_file', filename=member_profile.profile_image) }}" alt="Profile photo for {{ selected_member }}">
+            {% else %}
+              <div class="profile-photo empty">No profile photo</div>
+            {% endif %}
+          </div>
+
+          <div class="profile-fields">
+            <label>
+              Profile picture
+              <span class="field-hint">PNG, JPEG, WebP, or GIF up to 5 MB.</span>
+              <input name="profile_image" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+            </label>
+
+            <div class="profile-grid">
+              <label>
+                Instagram
+                <input name="instagram" value="{{ member_profile.instagram }}" maxlength="240" placeholder="@username or profile link">
+              </label>
+              <label>
+                Phone number
+                <input name="phone" type="tel" value="{{ member_profile.phone }}" maxlength="80">
+              </label>
+              <label>
+                Email
+                <input name="email" type="email" value="{{ member_profile.email }}" maxlength="254">
+              </label>
+            </div>
+
+            <label>
+              Notes
+              <textarea name="notes" maxlength="2000" placeholder="Anything useful to remember about this member">{{ member_profile.notes }}</textarea>
+            </label>
+
+            <div class="actions">
+              <button type="submit">Save Player Profile</button>
+            </div>
+          </div>
+        </form>
+      {% else %}
+        <p>No known players are available yet.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

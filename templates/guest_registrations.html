@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Registered Players</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101010; color: #f5f5f5; font-family: Arial, sans-serif; }
+    header { position: sticky; top: 0; z-index: 5; border-bottom: 1px solid #333; background: #171717; padding: 15px 16px; }
+    .header-inner { width: min(720px, 100%); margin: 0 auto; }
+    h1 { margin: 0; font-size: 23px; }
+    .week { margin-top: 4px; color: #aaa; font-size: 13px; font-weight: bold; }
+    main { width: min(720px, 100%); margin: 0 auto; padding: 16px 14px 90px; }
+    .summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 15px; }
+    .summary-card { border: 1px solid #333; border-radius: 8px; background: #191919; padding: 12px; }
+    .summary-label { color: #999; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+    .summary-value { margin-top: 4px; font-size: 23px; font-weight: bold; }
+    .search { width: 100%; margin-bottom: 16px; border: 1px solid #555; border-radius: 7px; background: #050505; color: #fff; padding: 10px 12px; font-size: 16px; }
+    .search:focus { border-color: #7CFF7C; outline: none; }
+    section { margin-bottom: 20px; }
+    .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+    h2 { margin: 0; font-size: 17px; }
+    .section-count { color: #aaa; font-size: 12px; }
+    .player-list { border: 1px solid #333; border-radius: 8px; background: #181818; overflow: hidden; }
+    .player-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #303030; padding: 10px 12px; }
+    .player-row:last-child { border-bottom: 0; }
+    .player-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: bold; }
+    .badges { display: flex; gap: 5px; flex: 0 0 auto; }
+    .badge { border-radius: 999px; background: #303030; color: #ccc; padding: 3px 7px; font-size: 10px; font-weight: bold; }
+    .badge.member { background: #244824; color: #aaffaa; }
+    .badge.awaiting { background: #493c20; color: #ffe0a0; }
+    .empty { border: 1px dashed #444; border-radius: 8px; color: #888; padding: 16px; text-align: center; }
+    .actions { position: fixed; right: 0; bottom: 0; left: 0; display: flex; justify-content: center; gap: 8px; border-top: 1px solid #333; background: rgba(18,18,18,.96); padding: 10px; }
+    .actions a { border: 1px solid #555; border-radius: 7px; background: #eee; color: #111; padding: 10px 14px; font-size: 14px; font-weight: bold; text-decoration: none; }
+    .actions a.secondary { background: #222; color: #eee; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>Registered Players</h1>
+      <div class="week">{{ competition.display }}</div>
+    </div>
+  </header>
+  <main>
+    <div class="summary">
+      <div class="summary-card"><div class="summary-label">In competition</div><div class="summary-value">{{ active_players|length }}</div></div>
+      <div class="summary-card"><div class="summary-label">Awaiting addition</div><div class="summary-value">{{ awaiting_players|length }}</div></div>
+    </div>
+
+    <input class="search" id="guest-player-search" type="search" placeholder="Search registered players" autocomplete="off">
+
+    <section data-player-section>
+      <div class="section-heading"><h2>{% if has_active_comp %}In the competition{% else %}Competition not generated{% endif %}</h2><span class="section-count">{{ active_players|length }}</span></div>
+      {% if active_players %}
+        <div class="player-list">
+          {% for player in active_players %}
+            <div class="player-row" data-player-row data-search-name="{{ player.name | lower }}">
+              <span class="player-name">{{ player.name }}</span>
+              <span class="badges"><span class="badge {% if player.is_member %}member{% endif %}">{% if player.is_member %}Member{% else %}Non-member{% endif %}</span></span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty">No players have been added to the competition yet.</div>
+      {% endif %}
+    </section>
+
+    {% if awaiting_players %}
+      <section data-player-section>
+        <div class="section-heading"><h2>Approved, awaiting addition</h2><span class="section-count">{{ awaiting_players|length }}</span></div>
+        <div class="player-list">
+          {% for player in awaiting_players %}
+            <div class="player-row" data-player-row data-search-name="{{ player.name | lower }}">
+              <span class="player-name">{{ player.name }}</span>
+              <span class="badges">
+                <span class="badge {% if player.is_member %}member{% endif %}">{% if player.is_member %}Member{% else %}Non-member{% endif %}</span>
+                <span class="badge awaiting">{{ player.type }}</span>
+              </span>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  </main>
+  <nav class="actions">
+    <a class="secondary" href="{{ url_for('landing') }}">Back to Login</a>
+    <a href="{{ url_for('bracket') }}">View Bracket</a>
+  </nav>
+  <script>
+    const search = document.getElementById("guest-player-search");
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      document.querySelectorAll("[data-player-row]").forEach(row => {
+        row.hidden = Boolean(query) && !row.dataset.searchName.includes(query);
+      });
+      document.querySelectorAll("[data-player-section]").forEach(section => {
+        const rows = Array.from(section.querySelectorAll("[data-player-row]"));
+        section.hidden = rows.length > 0 && rows.every(row => row.hidden);
+      });
+    });
+  </script>
+</body>
+</html>

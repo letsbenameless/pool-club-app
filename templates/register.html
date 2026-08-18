@@ -155,6 +155,43 @@
       padding: 12px;
     }
 
+    .registration-requests-panel { margin-bottom: 16px; border-color: #5a744f; }
+    .registration-requests-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .registration-requests-heading h2 { margin: 0; }
+    .registration-request-count { color: #7CFF7C; font-size: 13px; font-weight: bold; }
+    .registration-request-list { display: grid; gap: 8px; }
+    .registration-request-card { border: 1px solid #383838; border-radius: 6px; background: #111; padding: 10px; }
+    .registration-request-meta { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: #aaa; font-size: 12px; }
+    .registration-request-form { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; gap: 7px; align-items: end; }
+    .registration-request-form label { display: grid; gap: 4px; color: #aaa; font-size: 12px; font-weight: bold; }
+    .registration-request-form input { box-sizing: border-box; width: 100%; border: 1px solid #555; border-radius: 5px; background: #050505; color: #fff; padding: 8px 9px; font: inherit; }
+    .registration-request-form .approve-request { border-color: #7CFF7C; background: #7CFF7C; color: #111; }
+    .registration-request-form .reject-request { border-color: #713f3f; background: #341b1b; color: #ffd2d2; }
+    .registration-request-message, .registration-request-error { border-radius: 6px; padding: 9px 11px; margin: 0 0 10px; }
+    .registration-request-message { background: #173417; color: #baffba; }
+    .registration-request-error { background: #3b1919; color: #ffd0d0; }
+    .registration-request-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; border-bottom: 1px solid #303030; padding: 6px 0; }
+    .registration-request-row:last-child { border-bottom: 0; }
+    .registration-request-summary { min-width: 0; border: 0; background: transparent; color: #fff; padding: 5px 4px; text-align: left; }
+    .registration-request-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: bold; }
+    .registration-request-membership { display: block; margin-top: 2px; color: #aaa; font-size: 11px; }
+    .registration-request-row form { margin: 0; }
+    .registration-request-row button.accept-compact, .registration-request-row button.deny-compact { padding: 7px 9px; font-size: 12px; }
+    .registration-request-row button.accept-compact { border-color: #7CFF7C; background: #7CFF7C; color: #111; }
+    .registration-request-row button.deny-compact { border-color: #713f3f; background: #341b1b; color: #ffd2d2; }
+    .request-detail-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 24px)); border: 1px solid #555; border-radius: 9px; background: #181818; color: #fff; padding: 0; }
+    .request-detail-dialog::backdrop { background: rgba(0, 0, 0, .72); }
+    .request-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #333; padding: 12px 14px; }
+    .request-detail-header h2 { margin: 0; font-size: 18px; }
+    .request-detail-header button { width: 34px; height: 32px; padding: 0; background: #222; color: #fff; }
+    .request-detail-body { padding: 14px; }
+    .request-detail-field { margin-bottom: 9px; color: #ddd; font-size: 13px; overflow-wrap: anywhere; }
+    .request-detail-field strong { color: #999; }
+    .request-detail-form { display: grid; gap: 9px; margin-top: 14px; }
+    .request-detail-form label { display: grid; gap: 5px; color: #aaa; font-size: 12px; font-weight: bold; }
+    .request-detail-form input { width: 100%; border: 1px solid #555; border-radius: 5px; background: #050505; color: #fff; padding: 9px; font: inherit; }
+    .request-detail-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
     .member-tools {
       display: flex;
       gap: 12px;
@@ -454,6 +491,8 @@
     }
 
     @media (max-width: 760px) {
+      .registration-request-form { grid-template-columns: 1fr 1fr; }
+      .registration-request-form label { grid-column: 1 / -1; }
       header {
         position: static;
         align-items: flex-start;
@@ -585,6 +624,61 @@
   </header>
 
   <main>
+    {% if registration_request_message %}<p class="registration-request-message">{{ registration_request_message }}</p>{% endif %}
+    {% if registration_request_error %}<p class="registration-request-error">{{ registration_request_error }}</p>{% endif %}
+
+    {% if pending_registration_requests %}
+      <section class="panel registration-requests-panel">
+        <div class="registration-requests-heading">
+          <h2>Non-executive registrations</h2>
+          <span class="registration-request-count">{{ pending_registration_requests|length }} pending</span>
+        </div>
+        <div class="registration-request-list">
+          {% for item in pending_registration_requests %}
+            <article class="registration-request-row">
+              <button class="registration-request-summary" type="button" data-request-details data-request-id="{{ item.id }}" data-player-name="{{ item.player_name }}" data-email="{{ item.email }}" data-requested-at="{{ item.requested_at }}" data-membership="{% if item.is_member %}Member{% else %}Non-member{% endif %}">
+                <span class="registration-request-name">{{ item.display_name }}</span>
+                <span class="registration-request-membership">{% if item.is_member %}Member{% else %}Non-member{% endif %}</span>
+              </button>
+              <form method="POST" action="{{ url_for('player_registration_requests_route') }}">
+                <input type="hidden" name="request_id" value="{{ item.id }}">
+                <input type="hidden" name="player_name" value="{{ item.player_name }}">
+                <button class="accept-compact" type="submit" name="action" value="approve">Accept</button>
+              </form>
+              <form method="POST" action="{{ url_for('player_registration_requests_route') }}">
+                <input type="hidden" name="request_id" value="{{ item.id }}">
+                <input type="hidden" name="player_name" value="{{ item.player_name }}">
+                <button class="deny-compact" type="submit" name="action" value="reject">Deny</button>
+              </form>
+            </article>
+          {% endfor %}
+        </div>
+        <datalist id="registration-known-player-options">
+          {% for player in known_players %}<option value="{{ player.name }}"></option>{% endfor %}
+        </datalist>
+      </section>
+    {% endif %}
+
+    <dialog class="request-detail-dialog" id="registration-request-dialog">
+      <div class="request-detail-header">
+        <h2 id="registration-request-dialog-title">Registration details</h2>
+        <button type="button" id="registration-request-dialog-close" aria-label="Close registration details">&times;</button>
+      </div>
+      <div class="request-detail-body">
+        <div class="request-detail-field"><strong>Email:</strong> <span id="request-detail-email"></span></div>
+        <div class="request-detail-field"><strong>Membership:</strong> <span id="request-detail-membership"></span></div>
+        <div class="request-detail-field"><strong>Requested:</strong> <span id="request-detail-date"></span></div>
+        <form class="request-detail-form" method="POST" action="{{ url_for('player_registration_requests_route') }}">
+          <input type="hidden" name="request_id" id="request-detail-id">
+          <label>Player name<input name="player_name" id="request-detail-name" list="registration-known-player-options" required></label>
+          <div class="request-detail-actions">
+            <button class="approve-request" type="submit" name="action" value="approve">Accept</button>
+            <button class="reject-request" type="submit" name="action" value="reject">Deny</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
     <div class="counts">
       <div class="count-card status-card">
         <div class="count-label">Competition Status</div>
@@ -792,6 +886,27 @@ let registrationSaveTimer = null;
 let registrationSaveInFlight = false;
 let registrationSaveAgain = false;
 let registrationSubmitting = false;
+
+const registrationRequestDialog = document.getElementById("registration-request-dialog");
+document.querySelectorAll("[data-request-details]").forEach(button => {
+  button.addEventListener("click", () => {
+    document.getElementById("registration-request-dialog-title").textContent = button.dataset.playerName;
+    document.getElementById("request-detail-id").value = button.dataset.requestId;
+    document.getElementById("request-detail-name").value = button.dataset.playerName;
+    document.getElementById("request-detail-email").textContent = button.dataset.email;
+    document.getElementById("request-detail-membership").textContent = button.dataset.membership;
+    document.getElementById("request-detail-date").textContent = button.dataset.requestedAt;
+    registrationRequestDialog.showModal();
+  });
+});
+
+document.getElementById("registration-request-dialog-close")?.addEventListener("click", () => {
+  registrationRequestDialog.close();
+});
+
+registrationRequestDialog?.addEventListener("click", event => {
+  if (event.target === registrationRequestDialog) registrationRequestDialog.close();
+});
 
 const fieldForAction = {
   generate: "new_players",
