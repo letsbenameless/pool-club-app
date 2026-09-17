@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Account</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { box-sizing: border-box; min-height: 100vh; min-height: 100dvh; margin: 0; background: #101010; color: #f5f5f5; font-family: Arial, sans-serif; }
+    header { margin-left: 220px; padding: 18px; border-bottom: 1px solid #333; background: #171717; }
+    main { margin-left: 220px; padding: 18px; }
+    .account-panel { width: min(100%, 480px); border: 1px solid #333; border-radius: 8px; background: #181818; padding: 18px; }
+    .executive-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 220px; border-right: 1px solid #333; background: #151515; padding: 16px 12px; }
+    .sidebar-title { margin: 0 0 14px; color: #aaa; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .executive-sidebar nav { display: grid; gap: 7px; }
+    .executive-sidebar a, .executive-sidebar button { width: 100%; border: 1px solid #444; border-radius: 6px; background: #222; color: #f5f5f5; padding: 9px 12px; font-size: 14px; font-weight: bold; text-align: left; text-decoration: none; cursor: pointer; }
+    .executive-sidebar a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .sidebar-edge-handle, .sidebar-overlay { display: none; }
+    h1 { margin: 0; font-size: 23px; }
+    .identity { margin: 0 0 18px; color: #aaa; font-size: 13px; }
+    form, label { display: grid; gap: 10px; }
+    label { color: #ddd; font-size: 13px; font-weight: bold; }
+    input { width: 100%; border: 1px solid #555; border-radius: 6px; background: #050505; color: #fff; padding: 10px 11px; font-size: 16px; }
+    input:focus { border-color: #7CFF7C; outline: none; }
+    .readonly { border: 1px solid #333; border-radius: 6px; background: #111; color: #aaa; padding: 10px 11px; }
+    .hint { color: #999; font-size: 12px; font-weight: normal; }
+    .profile-photo { width: 96px; height: 96px; border: 1px solid #444; border-radius: 10px; background: #101010; object-fit: cover; }
+    .photo-row { display: grid; grid-template-columns: 96px minmax(0,1fr); align-items: center; gap: 12px; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+    button, a { border: 1px solid #555; border-radius: 6px; padding: 10px 12px; font-size: 14px; font-weight: bold; text-align: center; text-decoration: none; cursor: pointer; }
+    button { background: #eee; color: #111; }
+    a { background: #222; color: #fff; }
+    .message, .error { border-radius: 6px; padding: 10px 12px; font-size: 13px; font-weight: bold; }
+    .message { border: 1px solid #397339; background: #173417; color: #baffba; }
+    .error { border: 1px solid #814343; background: #3b1919; color: #ffd0d0; }
+    .account-section { margin-top: 18px; border-top: 1px solid #333; padding-top: 18px; }
+    .account-section h2 { margin: 0 0 8px; font-size: 17px; }
+    .account-section p { color: #aaa; font-size: 13px; line-height: 1.4; }
+    .logout-button { background: #321b1b; border-color: #8a4646; color: #ffd2d2; }
+    @media (max-width: 760px) {
+      header, main { margin-left: 0; }
+      main { padding: 12px; }
+      .executive-sidebar { transform: translateX(-100%); transition: transform .2s; }
+      body.sidebar-open .executive-sidebar { transform: translateX(0); }
+      .sidebar-edge-handle { display: block; position: fixed; left: 8px; bottom: 8px; z-index: 40; }
+      .sidebar-overlay { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.6); }
+      body.sidebar-open .sidebar-overlay { display: block; }
+    }
+  </style>
+</head>
+<body>
+  {% include "_executive_sidebar.html" %}
+  <header><h1>My Account</h1><p class="page-date">{{ competition.display }}</p></header>
+  <main>
+    <div class="account-panel">
+    <p class="identity">{{ 'Executive' if account_type == 'executive' else 'Player' }} account</p>
+    {% if message %}<p class="message">{{ message }}</p>{% endif %}
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="action" value="update_details">
+      <label>Name
+        <span class="readonly">{{ account.player_name or 'No name recorded' }}</span>
+      </label>
+      {% if account_type == 'executive' %}
+        <label>Role<span class="readonly">{{ account.executive_role }}</span></label>
+      {% else %}
+        <label>Profile status<span class="readonly">{{ account.claim_status | title }}</span></label>
+      {% endif %}
+      <label>Profile photo <span class="hint">Optional. PNG, JPEG, WebP, or GIF up to 5 MB.</span>
+        <span class="photo-row">
+          {% if account_profile_image_url %}<img class="profile-photo" src="{{ account_profile_image_url }}" alt="Current profile photo">{% else %}<span class="profile-photo" style="display:grid;place-items:center;color:#777;font-size:12px;">No photo</span>{% endif %}
+          <input name="profile_image" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+        </span>
+      </label>
+      <label>Instagram
+        <input name="instagram" autocomplete="off" value="{{ request.form.get('instagram', account_profile.instagram) }}" maxlength="240" placeholder="@username or profile link">
+      </label>
+      <label>Email
+        <input name="email" type="email" autocomplete="email" value="{{ request.form.get('email', account_email) }}" required>
+      </label>
+      <label>Phone number <span class="hint">Optional. Clear this field to remove your number.</span>
+        <input name="phone" type="tel" autocomplete="tel" value="{{ request.form.get('phone', account.phone) }}" placeholder="e.g. 0412 345 678">
+      </label>
+      <div class="actions">
+        <button type="submit">Save details</button>
+        <button class="logout-button" type="submit" form="account-logout-form">Log out</button>
+      </div>
+    </form>
+    <section class="account-section">
+      <h2>Password</h2>
+      <p>Update your password on a separate secure screen.</p>
+      <a href="{{ url_for('change_password') }}" style="display:block;">Change password</a>
+    </section>
+    {% if account_type == 'player' %}
+      <section class="account-section">
+        <h2>Executive access</h2>
+        {% if pending_executive_request %}
+          <p>Your request for the {{ pending_executive_request.executive_role }} role is awaiting review.</p>
+        {% else %}
+          <p>Request an executive role using your existing account and login details.</p>
+          <form method="POST">
+            <input type="hidden" name="action" value="request_executive">
+            <label>Requested role
+              <select name="executive_role" style="width:100%; border:1px solid #555; border-radius:6px; background:#050505; color:#fff; padding:10px 11px; font-size:16px;">
+                {% for role in executive_roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}
+              </select>
+            </label>
+            <button type="submit">Request executive access</button>
+          </form>
+        {% endif %}
+      </section>
+    {% endif %}
+    <form id="account-logout-form" method="POST" action="{{ url_for('executive_logout') if account_type == 'executive' else url_for('user_logout') }}"></form>
+    </div>
+  </main>
+</body>
+</html>

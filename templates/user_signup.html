@@ -143,6 +143,11 @@
       </label>
 
       <label>
+        Phone number <span style="color:#999; font-weight:normal;">(optional)</span>
+        <input name="phone" type="tel" autocomplete="tel" value="{{ request.form.get('phone', '') }}" placeholder="e.g. 0412 345 678">
+      </label>
+
+      <label>
         Password
         <input name="password" type="password" autocomplete="new-password" minlength="8" required>
       </label>

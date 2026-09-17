@@ -132,12 +132,11 @@
     }
 
     .week-badge {
-      position: absolute;
-      left: 50%;
-      transform: translateX(-50%);
+      position: static;
+      margin-top: 4px;
       color: #aaa;
       font-size: 13px;
-      font-weight: bold;
+      font-weight: normal;
       white-space: nowrap;
     }
 
@@ -242,6 +241,17 @@
 
     .known-players-panel {
       margin-top: 24px;
+    }
+
+    details.panel > summary {
+      cursor: pointer;
+      color: #aaa;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    details.panel[open] > summary {
+      margin-bottom: 14px;
     }
 
     .member-row {
@@ -495,8 +505,8 @@
       .registration-request-form label { grid-column: 1 / -1; }
       header {
         position: static;
-        align-items: flex-start;
-        flex-direction: column;
+        align-items: center;
+        flex-direction: row;
         margin-left: 0;
       }
 
@@ -546,7 +556,7 @@
       }
 
       .nav-actions {
-        width: 100%;
+        width: auto;
       }
 
       .week-badge {
@@ -556,7 +566,7 @@
 
       .nav-actions a,
       .nav-actions button {
-        flex: 1 1 auto;
+        flex: 0 0 auto;
         text-align: center;
       }
 
@@ -616,8 +626,7 @@
 <body>
   {% include "_executive_sidebar.html" %}
   <header>
-    <h1>Register Players</h1>
-    <div class="week-badge">{{ competition.display }}</div>
+    <div><h1>Register Players</h1><div class="week-badge">{{ competition.display }}</div></div>
     <div class="nav-actions">
       <a href="{{ url_for('bracket') }}">Bracket Display</a>
     </div>
@@ -772,8 +781,8 @@
         {% endif %}
   </form>
 
-  <div class="panel known-players-panel">
-    <h2>Known Players</h2>
+  <details class="panel known-players-panel">
+    <summary>Known Players</summary>
     <div class="member-edit-row">
       <a class="button-link" href="{{ url_for('edit_members') }}">Edit Members</a>
       <span class="member-count">{{ known_players|length }} known / {{ members|length }} members</span>
@@ -821,10 +830,10 @@
         {% endfor %}
       </div>
     </div>
-  </div>
+  </details>
 
-  <div class="panel" style="margin-top: 24px;">
-    <h2>Player Elo Ratings</h2>
+  <details class="panel" style="margin-top: 24px;">
+    <summary>Player Elo Ratings</summary>
     <p>Ratings update automatically when a game winner is advanced in the bracket.</p>
 
     <table>
@@ -853,7 +862,7 @@
         {% endfor %}
       </tbody>
     </table>
-  </div>
+  </details>
 
   </main>
 
@@ -886,6 +895,43 @@ let registrationSaveTimer = null;
 let registrationSaveInFlight = false;
 let registrationSaveAgain = false;
 let registrationSubmitting = false;
+let autocompleteSelectionAwaitingRelease = false;
+let autocompleteSelectionGuardTimer = null;
+
+function guardCompStartAfterAutocompleteSelection() {
+  autocompleteSelectionAwaitingRelease = true;
+  window.clearTimeout(autocompleteSelectionGuardTimer);
+  autocompleteSelectionGuardTimer = window.setTimeout(() => {
+    autocompleteSelectionAwaitingRelease = false;
+  }, 1200);
+}
+
+function isGuardedRegistrationButton(target) {
+  return target instanceof Element
+    && Boolean(target.closest([
+      "button[type='submit'][name='action'][value='generate']",
+      "button[type='submit'][name='action'][value='add_late']",
+      "button[type='submit'][name='action'][value='add_buybacks']"
+    ].join(",")));
+}
+
+// If the suggestion disappears beneath the finger, consume any click that lands
+// on a registration action. A new pointer-down counts as the deliberate second tap.
+document.addEventListener("pointerdown", (event) => {
+  if (autocompleteSelectionAwaitingRelease && isGuardedRegistrationButton(event.target)) {
+    autocompleteSelectionAwaitingRelease = false;
+    window.clearTimeout(autocompleteSelectionGuardTimer);
+  }
+}, true);
+
+document.addEventListener("click", (event) => {
+  if (autocompleteSelectionAwaitingRelease && isGuardedRegistrationButton(event.target)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    autocompleteSelectionAwaitingRelease = false;
+    window.clearTimeout(autocompleteSelectionGuardTimer);
+  }
+}, true);
 
 const registrationRequestDialog = document.getElementById("registration-request-dialog");
 document.querySelectorAll("[data-request-details]").forEach(button => {
@@ -1368,6 +1414,8 @@ function updateAutocompleteHint(field) {
     row.dataset.index = String(index);
     row.addEventListener("pointerdown", (event) => {
       event.preventDefault();
+      event.stopPropagation();
+      guardCompStartAfterAutocompleteSelection();
       acceptAutocompleteSuggestionAtIndex(field, index);
       field.focus({ preventScroll: true });
     });
@@ -1528,6 +1576,13 @@ textareas.forEach(field => {
 registerForm.addEventListener("submit", (event) => {
   const clickedButton = event.submitter;
   const action = clickedButton?.value;
+
+  if (["generate", "add_late", "add_buybacks"].includes(action) && autocompleteSelectionAwaitingRelease) {
+    event.preventDefault();
+    autocompleteSelectionAwaitingRelease = false;
+    window.clearTimeout(autocompleteSelectionGuardTimer);
+    return;
+  }
 
   if (action === "end_comp" && !confirm("End the current competition and clear the bracket?")) {
     event.preventDefault();

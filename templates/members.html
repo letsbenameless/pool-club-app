@@ -31,7 +31,15 @@
 
     main {
       padding: 18px;
+      margin-left: 220px;
     }
+    header { margin-left: 220px; }
+    .executive-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; box-sizing: border-box; width: 220px; border-right: 1px solid #333; background: #151515; padding: 16px 12px; }
+    .sidebar-title { margin: 0 0 14px; color: #aaa; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .executive-sidebar nav { display: grid; gap: 7px; }
+    .executive-sidebar a, .executive-sidebar button { box-sizing: border-box; width: 100%; border: 1px solid #444; border-radius: 6px; background: #222; color: #f5f5f5; padding: 9px 12px; font-size: 14px; font-weight: bold; text-align: left; text-decoration: none; cursor: pointer; }
+    .executive-sidebar a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .sidebar-edge-handle, .sidebar-overlay { display: none; }
 
     form {
       display: grid;
@@ -151,6 +159,7 @@
 </head>
 
 <body>
+  {% include "_executive_sidebar.html" %}
   <header>
     <h1>Edit Members</h1>
     <div class="week-badge">{{ competition.display }}</div>

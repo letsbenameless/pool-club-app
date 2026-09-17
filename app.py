@@ -9,6 +9,7 @@ from payment_report import (
 )
 
 import datetime as dt
+import base64
 import io
 import smtplib
 import json
@@ -17,6 +18,9 @@ import random
 import re
 import secrets
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 import qrcode
 import qrcode.image.svg
 from contextlib import closing
@@ -87,6 +91,22 @@ EXECUTIVE_ROLES = (
     "Secretary",
     "Social Media Manager",
 )
+ACTION_TYPE_LABELS = {
+    "player_registered": "Player registered", "player_removed": "Player removed",
+    "registration_approved": "Registration approved", "competition_started": "Competition started",
+    "registration_rejected": "Registration rejected", "executive_rejected": "Executive rejected",
+    "competition_ended": "Competition ended", "late_players_added": "Late players added",
+    "buybacks_added": "Buybacks added", "qr_added": "QR code added",
+    "qr_updated": "QR code updated", "qr_removed": "QR code removed",
+    "logo_added": "Logo added", "logo_updated": "Logo updated", "logo_removed": "Logo removed",
+    "executive_approved": "Executive approved", "game_action": "Competition management action",
+    "account_updated": "Account updated", "account_deleted": "Account deleted",
+    "message_sent": "Message sent", "members_updated": "Member list updated",
+}
+DEFAULT_PAYOUT_PRESETS = [
+    {"player_count": count, "first": prizes[1], "second": prizes[2], "third": prizes[3]}
+    for count, prizes in PRESET_WINNINGS.items()
+]
 DEFAULT_BRACKET_SETTINGS = {
     "highlight_color": "#FF7900",
     "remove_hover_color": "#ff7c7c",
@@ -98,7 +118,28 @@ DEFAULT_BRACKET_SETTINGS = {
     "qr_color": "#ffffff",
     "qr_background_color": "#000000",
     "logo_filename": "logo.png",
+    "timezone": "Australia/Brisbane",
+    "competition_end_time": "22:00",
+    "payout_presets": DEFAULT_PAYOUT_PRESETS,
 }
+TIMEZONE_OPTIONS = (
+    ("Australia/Brisbane", "AEST — Brisbane"),
+    ("Australia/Sydney", "Sydney/Melbourne"),
+    ("Australia/Adelaide", "Adelaide"),
+    ("Australia/Perth", "Perth"),
+    ("Pacific/Auckland", "New Zealand"),
+    ("Asia/Tokyo", "Japan"),
+    ("Asia/Singapore", "Singapore"),
+    ("Asia/Kolkata", "India"),
+    ("Europe/London", "London"),
+    ("Europe/Paris", "Central Europe"),
+    ("America/New_York", "US Eastern"),
+    ("America/Chicago", "US Central"),
+    ("America/Denver", "US Mountain"),
+    ("America/Los_Angeles", "US Pacific"),
+    ("UTC", "UTC"),
+)
+VALID_TIMEZONES = {value for value, _ in TIMEZONE_OPTIONS}
 BRACKET_COLOR_SETTING_KEYS = (
     "highlight_color",
     "remove_hover_color",
@@ -271,6 +312,7 @@ def ensure_executive_users_schema(conn):
             password_hash TEXT NOT NULL,
             player_name TEXT NOT NULL DEFAULT '',
             executive_role TEXT NOT NULL DEFAULT 'Executive',
+            phone TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_login_at TEXT
@@ -286,6 +328,9 @@ def ensure_executive_users_schema(conn):
 
     if "executive_role" not in columns:
         conn.execute("ALTER TABLE executive_users ADD COLUMN executive_role TEXT NOT NULL DEFAULT 'Executive'")
+
+    if "phone" not in columns:
+        conn.execute("ALTER TABLE executive_users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
 
     migrate_known_executive_usernames(conn)
 
@@ -313,12 +358,16 @@ def ensure_executive_requests_schema(conn):
             password_hash TEXT NOT NULL,
             player_name TEXT NOT NULL,
             executive_role TEXT NOT NULL DEFAULT 'Executive',
+            phone TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
             requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             resolved_at TEXT,
             resolved_by_username TEXT NOT NULL DEFAULT ''
         )
     """)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(executive_requests)")}
+    if "phone" not in columns:
+        conn.execute("ALTER TABLE executive_requests ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
 
 
 def ensure_user_accounts_schema(conn):
@@ -330,6 +379,7 @@ def ensure_user_accounts_schema(conn):
             player_name TEXT NOT NULL DEFAULT '',
             claim_status TEXT NOT NULL DEFAULT 'pending',
             profile_image TEXT NOT NULL DEFAULT '',
+            phone TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_login_at TEXT
         )
@@ -341,6 +391,8 @@ def ensure_user_accounts_schema(conn):
         conn.execute("ALTER TABLE user_accounts ADD COLUMN claim_status TEXT NOT NULL DEFAULT 'pending'")
     if "profile_image" not in columns:
         conn.execute("ALTER TABLE user_accounts ADD COLUMN profile_image TEXT NOT NULL DEFAULT ''")
+    if "phone" not in columns:
+        conn.execute("ALTER TABLE user_accounts ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS player_registration_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,6 +415,301 @@ def ensure_user_accounts_schema(conn):
         ON player_registration_requests(player_name COLLATE NOCASE)
         WHERE status = 'pending'
     """)
+
+
+def ensure_action_log_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS executive_action_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            executive_user_id INTEGER,
+            executive_email TEXT NOT NULL,
+            executive_name TEXT NOT NULL DEFAULT '',
+            action_type TEXT NOT NULL,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+
+def ensure_competition_history_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS competition_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comp_date TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL DEFAULT '',
+            ended_at TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'automatic',
+            players TEXT NOT NULL DEFAULT '[]',
+            winners TEXT NOT NULL DEFAULT '{}',
+            finance TEXT NOT NULL DEFAULT '{}',
+            bracket_state TEXT NOT NULL DEFAULT '{}',
+            registration_state TEXT NOT NULL DEFAULT '{}',
+            actions TEXT NOT NULL DEFAULT '[]',
+            settings TEXT NOT NULL DEFAULT '{}',
+            payment_report BLOB,
+            notes TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    history_columns = {row["name"] for row in conn.execute("PRAGMA table_info(competition_history)")}
+    if "payment_report" not in history_columns:
+        conn.execute("ALTER TABLE competition_history ADD COLUMN payment_report BLOB")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS historical_debt_payments (
+            history_id INTEGER NOT NULL,
+            debt_key TEXT NOT NULL,
+            player_name TEXT NOT NULL,
+            amount REAL NOT NULL DEFAULT 0,
+            source_week TEXT NOT NULL,
+            collected_comp_date TEXT NOT NULL,
+            collected_by TEXT NOT NULL DEFAULT '',
+            collected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (history_id, debt_key)
+        )
+    """)
+
+
+def save_competition_history_snapshot(state, registration_state, finance, notes=""):
+    with closing(get_db()) as conn:
+        ensure_action_log_schema(conn)
+        ensure_competition_history_schema(conn)
+        start_row = conn.execute(
+            "SELECT created_at FROM executive_action_log WHERE action_type = 'competition_started' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        started_at = start_row["created_at"] if start_row else ""
+        end_row = conn.execute(
+            "SELECT created_at FROM executive_action_log WHERE action_type = 'competition_ended' AND created_at >= ? ORDER BY id DESC LIMIT 1",
+            (started_at,),
+        ).fetchone()
+        ended_at = end_row["created_at"] if end_row else dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        action_rows = conn.execute(
+            "SELECT executive_email, executive_name, action_type, description, created_at FROM executive_action_log WHERE created_at >= ? AND created_at <= ? ORDER BY id",
+            (started_at, ended_at),
+        ).fetchall() if started_at else []
+        players = [player["name"] for player in finance.get("players", []) if player.get("name")]
+        comp_date = clean_date_key(finance.get("comp_date"))
+        payment_report = build_payment_report_pdf(finance, payment_report_history(), comp_date)
+        conn.execute(
+            """INSERT INTO competition_history
+               (comp_date, title, started_at, ended_at, source, players, winners,
+                finance, bracket_state, registration_state, actions, settings,
+                payment_report, notes, created_by)
+               VALUES (?, ?, ?, ?, 'automatic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                comp_date,
+                competition_context_for_date(comp_date)["display"],
+                started_at,
+                ended_at,
+                json_dumps_compact(players),
+                json_dumps_compact(finance.get("winners", {})),
+                json_dumps_compact(finance),
+                json_dumps_compact(normalize_state(state)),
+                json_dumps_compact(registration_state),
+                json_dumps_compact([dict(row) for row in action_rows]),
+                json_dumps_compact(load_bracket_settings()),
+                payment_report,
+                str(notes or "")[:5000],
+                str(session.get("executive_username", "")),
+            ),
+        )
+        conn.commit()
+
+
+def competition_history_entries():
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        rows = conn.execute("SELECT * FROM competition_history ORDER BY comp_date DESC, id DESC").fetchall()
+    entries = []
+    for row in rows:
+        item = dict(row)
+        for field, fallback in (("players", []), ("winners", {}), ("finance", {}), ("bracket_state", {}), ("registration_state", {}), ("actions", []), ("settings", {})):
+            item[field] = json_loads_or_default(item[field], fallback)
+        context = competition_context_for_date(item["comp_date"])
+        item["week_label"] = f"{context['week_label']} · {semester_key_for_date(item['comp_date'])}"
+        entries.append(item)
+    return entries
+
+
+def historical_player_debts(current_comp_date=""):
+    debts = {}
+    has_active_competition = competition_is_active()
+    excluded_comp_date = current_comp_date if has_active_competition else ""
+    histories = competition_history_entries()
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        settled = {
+            (int(row["history_id"]), row["debt_key"])
+            for row in conn.execute("SELECT history_id, debt_key FROM historical_debt_payments")
+        }
+    for history in histories:
+        if history["comp_date"] == excluded_comp_date:
+            continue
+        for index, player in enumerate(history.get("finance", {}).get("players", [])):
+            if player.get("paid") or not player.get("name"):
+                continue
+            debt_key = str(index)
+            if (int(history["id"]), debt_key) in settled:
+                continue
+            name = str(player["name"])
+            debt = debts.setdefault(name.casefold(), {"name": name, "total": 0.0, "weeks": [], "items": []})
+            debt["total"] = round(debt["total"] + clean_money_value(player.get("fee")), 2)
+            debt["weeks"].append({"label": history["week_label"], "amount": clean_money_value(player.get("fee"))})
+            debt["items"].append({"key": f"{history['id']}:{debt_key}", "history_id": history["id"], "debt_key": debt_key, "week": history["week_label"], "amount": clean_money_value(player.get("fee"))})
+    return sorted(debts.values(), key=lambda item: (-item["total"], item["name"].casefold()))
+
+
+def competition_is_active():
+    state = normalize_state(load_state() or empty_state())
+    return any(
+        str(name or "").strip()
+        for name in state.get("left", []) + state.get("right", [])
+    )
+
+
+def debt_collections_for_date(comp_date):
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        return [dict(row) for row in conn.execute(
+            "SELECT * FROM historical_debt_payments WHERE collected_comp_date = ? ORDER BY player_name COLLATE NOCASE, source_week",
+            (clean_date_key(comp_date),),
+        ).fetchall()]
+
+
+def payment_debt_entries(comp_date):
+    if not competition_is_active():
+        return []
+    entries = []
+    for debt in historical_player_debts(comp_date):
+        for item in debt["items"]:
+            entries.append({**item, "name": debt["name"], "checked": False})
+    for row in debt_collections_for_date(comp_date):
+        entries.append({
+            "key": f"{row['history_id']}:{row['debt_key']}",
+            "name": row["player_name"],
+            "week": row["source_week"],
+            "amount": clean_money_value(row["amount"]),
+            "checked": True,
+        })
+    return sorted(entries, key=lambda item: (item["checked"], item["name"].casefold(), item["week"]))
+
+
+def save_debt_collections(comp_date, checked_keys):
+    comp_date = clean_date_key(comp_date)
+    checked_keys = {str(key) for key in checked_keys}
+    histories = {int(item["id"]): item for item in competition_history_entries()}
+    valid = {}
+    for key in checked_keys:
+        try:
+            history_id_text, debt_key = key.split(":", 1)
+            history_id, index = int(history_id_text), int(debt_key)
+            history = histories[history_id]
+            player = history.get("finance", {}).get("players", [])[index]
+        except (ValueError, KeyError, IndexError, TypeError):
+            continue
+        if player.get("paid") or not player.get("name"):
+            continue
+        valid[key] = (history_id, debt_key, str(player["name"]), clean_money_value(player.get("fee")), history["week_label"])
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        existing = conn.execute(
+            "SELECT history_id, debt_key FROM historical_debt_payments WHERE collected_comp_date = ?",
+            (comp_date,),
+        ).fetchall()
+        for row in existing:
+            key = f"{row['history_id']}:{row['debt_key']}"
+            if key not in checked_keys:
+                conn.execute("DELETE FROM historical_debt_payments WHERE history_id = ? AND debt_key = ?", (row["history_id"], row["debt_key"]))
+        for history_id, debt_key, player_name, amount, source_week in valid.values():
+            conn.execute(
+                """INSERT INTO historical_debt_payments
+                   (history_id, debt_key, player_name, amount, source_week, collected_comp_date, collected_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(history_id, debt_key) DO UPDATE SET
+                     collected_comp_date=excluded.collected_comp_date,
+                     collected_by=excluded.collected_by,
+                     collected_at=CURRENT_TIMESTAMP""",
+                (history_id, debt_key, player_name, amount, source_week, comp_date, str(session.get("executive_username", ""))),
+            )
+        conn.commit()
+
+
+def save_manual_competition_history(form):
+    comp_date = clean_date_key(form.get("comp_date"))
+    players = [name.strip() for name in str(form.get("players", "")).splitlines() if name.strip()]
+    unpaid_names = {name.strip().casefold() for name in str(form.get("unpaid_players", "")).splitlines() if name.strip()}
+    entry_fee = clean_money_value(form.get("entry_fee"))
+    winners = {str(place): str(form.get(f"winner_{place}", "")).strip() for place in PAYOUT_PLACES}
+    finance = {
+        "players": [
+            {"name": name, "paid": name.casefold() not in unpaid_names, "fee": entry_fee}
+            for name in players
+        ],
+        "total_players": len(players),
+        "total_income": clean_money_value(form.get("total_income")),
+        "winnings_total": clean_money_value(form.get("winnings_total")),
+        "profit_loss": round(clean_money_value(form.get("total_income")) - clean_money_value(form.get("winnings_total")), 2),
+    }
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        conn.execute(
+            """INSERT INTO competition_history
+               (comp_date, title, source, players, winners, finance, notes, created_by)
+               VALUES (?, ?, 'manual', ?, ?, ?, ?, ?)""",
+            (
+                comp_date,
+                str(form.get("title", "")).strip()[:160] or competition_context_for_date(comp_date)["display"],
+                json_dumps_compact(players),
+                json_dumps_compact(winners),
+                json_dumps_compact(finance),
+                str(form.get("notes", ""))[:5000],
+                str(session.get("executive_username", "")),
+            ),
+        )
+        conn.commit()
+
+
+def log_executive_action(action_type, description):
+    executive_email = str(session.get("executive_username", "") or "")
+    if not executive_email:
+        return
+    with closing(get_db()) as conn:
+        ensure_action_log_schema(conn)
+        conn.execute(
+            """INSERT INTO executive_action_log
+               (executive_user_id, executive_email, executive_name, action_type, description)
+               VALUES (?, ?, ?, ?, ?)""",
+            (session.get("executive_user_id"), executive_email,
+             str(session.get("executive_player_name", "") or ""),
+             str(action_type or "")[:80], str(description or "")[:2000]),
+        )
+        conn.commit()
+
+
+def load_executive_actions(action_type="", executive="", search=""):
+    conditions, parameters = [], []
+    if action_type in ACTION_TYPE_LABELS:
+        conditions.append("action_type = ?")
+        parameters.append(action_type)
+    if executive:
+        conditions.append("executive_email = ?")
+        parameters.append(executive)
+    if search:
+        conditions.append("(description LIKE ? OR executive_name LIKE ? OR executive_email LIKE ?)")
+        term = f"%{search[:120]}%"
+        parameters.extend([term, term, term])
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    with closing(get_db()) as conn:
+        ensure_action_log_schema(conn)
+        rows = conn.execute(
+            f"SELECT * FROM executive_action_log {where} ORDER BY created_at DESC, id DESC LIMIT 1000",
+            parameters,
+        ).fetchall()
+        executives = conn.execute(
+            "SELECT DISTINCT executive_email, executive_name FROM executive_action_log ORDER BY executive_name, executive_email"
+        ).fetchall()
+    return [dict(row) for row in rows], [dict(row) for row in executives]
 
 
 def clean_username(username):
@@ -414,7 +761,7 @@ def get_user_account(email):
         return conn.execute(
             """
             SELECT id, email, password_hash,
-                   player_name, claim_status, profile_image
+                   player_name, claim_status, profile_image, phone
             FROM user_accounts
             WHERE email = ?
             """,
@@ -422,7 +769,28 @@ def get_user_account(email):
         ).fetchone()
 
 
-def create_user_account(email, password, player_name="", profile_image=""):
+def user_accounts_for_login(identifier):
+    email = clean_email(identifier)
+    phone = clean_phone(identifier)
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        if email:
+            rows = conn.execute("SELECT * FROM user_accounts WHERE email = ?", (email,)).fetchall()
+        elif phone:
+            candidates = conn.execute(
+                """
+                SELECT u.*, p.phone AS profile_phone
+                FROM user_accounts u
+                LEFT JOIN member_profiles p ON p.member_name = u.player_name COLLATE NOCASE
+                """
+            ).fetchall()
+            rows = [row for row in candidates if clean_phone(row["phone"] or row["profile_phone"]) == phone]
+        else:
+            rows = []
+    return rows
+
+
+def create_user_account(email, password, player_name="", profile_image="", phone=""):
     clean = clean_email(email)
 
     if not clean:
@@ -434,6 +802,9 @@ def create_user_account(email, password, player_name="", profile_image=""):
     requested_player = clean_requested_player_name(player_name)
     if not requested_player:
         return False, "Enter your name."
+    clean_phone_number = clean_phone(phone)
+    if str(phone or "").strip() and not clean_phone_number:
+        return False, "Enter a valid phone number or leave it blank."
 
     try:
         with closing(get_db()) as conn:
@@ -441,14 +812,15 @@ def create_user_account(email, password, player_name="", profile_image=""):
             conn.execute(
                 """
                 INSERT INTO user_accounts (
-                    email, password_hash, player_name, claim_status, profile_image
-                ) VALUES (?, ?, ?, 'pending', ?)
+                    email, password_hash, player_name, claim_status, profile_image, phone
+                ) VALUES (?, ?, ?, 'pending', ?, ?)
                 """,
                 (
                     clean,
                     generate_password_hash(password),
                     requested_player,
                     str(profile_image or "")[:240],
+                    clean_phone_number,
                 )
             )
             conn.commit()
@@ -483,7 +855,7 @@ def current_user_account():
         ensure_user_accounts_schema(conn)
         return conn.execute(
             """
-            SELECT id, email, player_name, claim_status, profile_image,
+            SELECT id, email, player_name, claim_status, profile_image, phone,
                    created_at, last_login_at
             FROM user_accounts
             WHERE id = ?
@@ -659,6 +1031,16 @@ def resolve_player_registration_request(request_id, action, edited_player_name, 
             ),
         )
         conn.commit()
+    if action == "approve":
+        log_executive_action(
+            "registration_approved",
+            f"approved {player_name}'s registration request",
+        )
+    else:
+        log_executive_action(
+            "registration_rejected",
+            f"rejected {player_name or row['player_name']}'s registration request",
+        )
     return True, "Registration approved and added to the registration page." if action == "approve" else "Registration request rejected."
 
 
@@ -672,12 +1054,33 @@ def get_executive_user(username):
         ensure_executive_users_schema(conn)
         return conn.execute(
             """
-            SELECT id, username, password_hash, player_name, executive_role
+            SELECT id, username, password_hash, player_name, executive_role, phone
             FROM executive_users
             WHERE username = ?
             """,
             (clean,)
         ).fetchone()
+
+
+def executive_users_for_login(identifier):
+    email = clean_email(identifier)
+    phone = clean_phone(identifier)
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        if email:
+            rows = conn.execute("SELECT * FROM executive_users WHERE username = ?", (email,)).fetchall()
+        elif phone:
+            candidates = conn.execute(
+                """
+                SELECT e.*, p.phone AS profile_phone
+                FROM executive_users e
+                LEFT JOIN member_profiles p ON p.member_name = e.player_name COLLATE NOCASE
+                """
+            ).fetchall()
+            rows = [row for row in candidates if clean_phone(row["phone"] or row["profile_phone"]) == phone]
+        else:
+            rows = []
+    return rows
 
 
 def get_executive_user_by_id(user_id):
@@ -690,7 +1093,7 @@ def get_executive_user_by_id(user_id):
         ensure_executive_users_schema(conn)
         return conn.execute(
             """
-            SELECT id, username, password_hash, player_name, executive_role
+            SELECT id, username, password_hash, player_name, executive_role, phone
             FROM executive_users
             WHERE id = ?
             """,
@@ -698,7 +1101,7 @@ def get_executive_user_by_id(user_id):
         ).fetchone()
 
 
-def create_executive_user(username, password, player_name="", role=None):
+def create_executive_user(username, password, player_name="", role=None, phone=""):
     clean = clean_email(username)
 
     if not clean:
@@ -716,6 +1119,9 @@ def create_executive_user(username, password, player_name="", role=None):
         return False, "Choose a known player from the list."
 
     clean_role = clean_executive_role(role)
+    clean_phone_number = clean_phone(phone)
+    if str(phone or "").strip() and not clean_phone_number:
+        return False, "Enter a valid phone number or leave it blank."
 
     try:
         with closing(get_db()) as conn:
@@ -723,14 +1129,15 @@ def create_executive_user(username, password, player_name="", role=None):
             conn.execute(
                 """
                 INSERT INTO executive_users (
-                    username, password_hash, player_name, executive_role
-                ) VALUES (?, ?, ?, ?)
+                    username, password_hash, player_name, executive_role, phone
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     clean,
                     generate_password_hash(password),
                     canonical_player_name,
                     clean_role,
+                    clean_phone_number,
                 )
             )
             conn.commit()
@@ -774,7 +1181,7 @@ def pending_executive_requests():
         ).fetchall()
 
 
-def create_executive_request(email, password, player_name, role):
+def create_executive_request(email, password, player_name, role, phone=""):
     clean = clean_email(email)
 
     if not clean:
@@ -791,6 +1198,9 @@ def create_executive_request(email, password, player_name, role):
     )
 
     clean_role = clean_executive_role(role)
+    clean_phone_number = clean_phone(phone)
+    if str(phone or "").strip() and not clean_phone_number:
+        return False, "Enter a valid phone number or leave it blank."
 
     if get_executive_user(clean):
         return False, "An executive account already exists for that email."
@@ -803,14 +1213,15 @@ def create_executive_request(email, password, player_name, role):
         conn.execute(
             """
             INSERT INTO executive_requests (
-                email, password_hash, player_name, executive_role
-            ) VALUES (?, ?, ?, ?)
+                email, password_hash, player_name, executive_role, phone
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
                 clean,
                 generate_password_hash(password),
                 canonical_player_name,
                 clean_role,
+                clean_phone_number,
             )
         )
         conn.commit()
@@ -819,9 +1230,45 @@ def create_executive_request(email, password, player_name, role):
         "email": clean,
         "player_name": canonical_player_name,
         "role": clean_role,
+        "phone": clean_phone_number,
     }
     send_executive_request_emails(request_info)
     return True, request_info
+
+
+def create_executive_request_for_user(user_id, role):
+    clean_role = clean_executive_role(role)
+    with closing(get_db()) as conn:
+        ensure_user_accounts_schema(conn)
+        ensure_executive_users_schema(conn)
+        ensure_executive_requests_schema(conn)
+        user = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (int(user_id),)).fetchone()
+        if not user:
+            return False, "Account was not found."
+        if not user["player_name"]:
+            return False, "Your account needs a player name before requesting executive access."
+        if conn.execute("SELECT 1 FROM executive_users WHERE username = ?", (user["email"],)).fetchone():
+            return False, "An executive account already exists for your email."
+        if conn.execute(
+            "SELECT 1 FROM executive_requests WHERE email = ? AND status = 'pending'",
+            (user["email"],),
+        ).fetchone():
+            return False, "Your executive request is already awaiting review."
+        conn.execute(
+            """
+            INSERT INTO executive_requests (
+                email, password_hash, player_name, executive_role, phone
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (user["email"], user["password_hash"], user["player_name"], clean_role, user["phone"]),
+        )
+        conn.commit()
+    request_info = {
+        "email": user["email"], "player_name": user["player_name"],
+        "role": clean_role, "phone": user["phone"],
+    }
+    send_executive_request_emails(request_info)
+    return True, "Executive request sent for review."
 
 
 def resolve_executive_request(request_id, action, resolver_username):
@@ -868,14 +1315,15 @@ def resolve_executive_request(request_id, action, resolver_username):
             conn.execute(
                 """
                 INSERT INTO executive_users (
-                    username, password_hash, player_name, executive_role
-                ) VALUES (?, ?, ?, ?)
+                    username, password_hash, player_name, executive_role, phone
+                ) VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     request_row["email"],
                     request_row["password_hash"],
                     request_row["player_name"],
                     clean_executive_role(request_row["executive_role"]),
+                    request_row["phone"],
                 )
             )
 
@@ -898,6 +1346,16 @@ def resolve_executive_request(request_id, action, resolver_username):
         "role": clean_executive_role(request_row["executive_role"]),
     }
     send_executive_resolution_email(request_info, status)
+    if status == "approved":
+        log_executive_action(
+            "executive_approved",
+            f"approved {request_info['player_name']}'s executive request",
+        )
+    else:
+        log_executive_action(
+            "executive_rejected",
+            f"rejected {request_info['player_name']}'s executive request",
+        )
     return True, status
 
 
@@ -959,6 +1417,269 @@ def send_email(to_addresses, subject, body):
         return False
 
     return True
+
+
+def clean_phone(value):
+    phone = re.sub(r"[^\d+]", "", str(value or "").strip())
+    if phone.startswith("00"):
+        phone = "+" + phone[2:]
+    if phone.startswith("0") and os.environ.get("POOL_APP_SMS_COUNTRY_CODE", "+61"):
+        phone = os.environ.get("POOL_APP_SMS_COUNTRY_CODE", "+61").rstrip("0") + phone[1:]
+    return phone if re.fullmatch(r"\+\d{8,15}", phone) else ""
+
+
+def local_phone_display(value):
+    phone = re.sub(r"[\s()-]", "", str(value or ""))
+    return "0" + phone[3:] if phone.startswith("+61") else phone
+
+
+def update_account_phone(account_type, account_id, phone):
+    clean_phone_number = clean_phone(phone)
+    if str(phone or "").strip() and not clean_phone_number:
+        return False, "Enter a valid phone number or leave it blank."
+    table = "executive_users" if account_type == "executive" else "user_accounts"
+    with closing(get_db()) as conn:
+        cursor = conn.execute(
+            f"UPDATE {table} SET phone = ? WHERE id = ?",
+            (clean_phone_number, int(account_id)),
+        )
+        conn.commit()
+    return (True, clean_phone_number) if cursor.rowcount else (False, "Account was not found.")
+
+
+def update_own_account(account_type, account_id, email, phone):
+    email = clean_email(email)
+    if not email:
+        return False, "Enter a valid email address."
+    clean_phone_number = clean_phone(phone)
+    if str(phone or "").strip() and not clean_phone_number:
+        return False, "Enter a valid phone number or leave it blank."
+    table = "executive_users" if account_type == "executive" else "user_accounts"
+    email_column = "username" if account_type == "executive" else "email"
+    try:
+        with closing(get_db()) as conn:
+            cursor = conn.execute(
+                f"UPDATE {table} SET {email_column} = ?, phone = ? WHERE id = ?",
+                (email, clean_phone_number, int(account_id)),
+            )
+            conn.commit()
+    except sqlite3.IntegrityError:
+        return False, "An account already uses that email address."
+    return (True, {"email": email, "phone": clean_phone_number}) if cursor.rowcount else (False, "Account was not found.")
+
+
+def load_account_profile(account):
+    player_name = str(account["player_name"] or "").strip()
+    profile = {"instagram": "", "profile_image": ""}
+    if not player_name:
+        return profile
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            "SELECT instagram, profile_image FROM member_profiles WHERE member_name = ? COLLATE NOCASE",
+            (player_name,),
+        ).fetchone()
+    if row:
+        profile.update(dict(row))
+    if not profile["profile_image"] and "profile_image" in account.keys():
+        profile["profile_image"] = account["profile_image"] or ""
+    return profile
+
+
+def update_own_profile(account_type, account, instagram, image_upload=None):
+    player_name = str(account["player_name"] or "").strip()
+    if not player_name:
+        return False, "Your account needs a player name before adding a profile."
+    current = load_account_profile(account)
+    profile_image = current["profile_image"]
+    if image_upload and image_upload.filename:
+        success, result = save_member_profile_image(image_upload)
+        if not success:
+            return False, result
+        profile_image = result
+    instagram = str(instagram or "").strip()[:240]
+    with closing(get_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO member_profiles (member_name, instagram, profile_image, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(member_name) DO UPDATE SET
+                instagram = excluded.instagram,
+                profile_image = excluded.profile_image,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (player_name, instagram, profile_image),
+        )
+        if account_type == "player":
+            conn.execute(
+                "UPDATE user_accounts SET profile_image = ? WHERE id = ?",
+                (profile_image, int(account["id"])),
+            )
+        conn.commit()
+    return True, {"instagram": instagram, "profile_image": profile_image}
+
+
+def change_own_password(account_type, account_id, current_password, new_password, confirm_password):
+    if len(new_password or "") < 8:
+        return False, "Use a new password with at least 8 characters."
+    if new_password != confirm_password:
+        return False, "The new passwords do not match."
+    table = "executive_users" if account_type == "executive" else "user_accounts"
+    email_column = "username" if account_type == "executive" else "email"
+    with closing(get_db()) as conn:
+        account = conn.execute(
+            f"SELECT {email_column} AS email, password_hash FROM {table} WHERE id = ?",
+            (int(account_id),),
+        ).fetchone()
+        if not account:
+            return False, "Account was not found."
+        if not check_password_hash(account["password_hash"], current_password or ""):
+            return False, "Your current password is incorrect."
+        new_hash = generate_password_hash(new_password)
+        conn.execute(f"UPDATE {table} SET password_hash = ? WHERE id = ?", (new_hash, int(account_id)))
+        if account_type == "executive":
+            conn.execute(
+                "UPDATE user_accounts SET password_hash = ? WHERE email = ? COLLATE NOCASE",
+                (new_hash, account["email"]),
+            )
+        conn.commit()
+    return True, "Password changed."
+
+
+def send_sms(phone, body):
+    """Send an SMS through Twilio when its environment variables are configured."""
+    recipient = clean_phone(phone)
+    account_sid = os.environ.get("POOL_APP_TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.environ.get("POOL_APP_TWILIO_AUTH_TOKEN", "")
+    from_number = clean_phone(os.environ.get("POOL_APP_TWILIO_FROM", ""))
+    if not recipient or not account_sid or not auth_token or not from_number:
+        return False
+
+    payload = urllib.parse.urlencode({
+        "To": recipient,
+        "From": from_number,
+        "Body": str(body or "")[:1600],
+    }).encode("utf-8")
+    sms_request = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+        data=payload,
+        method="POST",
+    )
+    credentials = base64.b64encode(f"{account_sid}:{auth_token}".encode("utf-8")).decode("ascii")
+    sms_request.add_header("Authorization", f"Basic {credentials}")
+    sms_request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(sms_request, timeout=10) as response:
+            return 200 <= response.status < 300
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def account_management_rows(account_filter="all", search=""):
+    allowed_filters = {"all", "requested_executive", "executive", "player"}
+    account_filter = account_filter if account_filter in allowed_filters else "all"
+    rows = []
+    with closing(get_db()) as conn:
+        ensure_executive_users_schema(conn)
+        ensure_executive_requests_schema(conn)
+        ensure_user_accounts_schema(conn)
+        ensure_action_log_schema(conn)
+        if account_filter in {"all", "requested_executive"}:
+            rows.extend(dict(row) | {"account_type": "requested_executive"} for row in conn.execute(
+                """
+                SELECT r.id, r.email, r.player_name, r.executive_role,
+                       r.requested_at AS created_at, COALESCE(p.instagram, '') AS instagram,
+                       COALESCE(NULLIF(r.phone, ''), p.phone, '') AS phone
+                FROM executive_requests r
+                LEFT JOIN member_profiles p ON p.member_name = r.player_name COLLATE NOCASE
+                WHERE r.status = 'pending'
+                ORDER BY r.requested_at DESC
+                """
+            ).fetchall())
+        if account_filter in {"all", "executive"}:
+            rows.extend(dict(row) | {"account_type": "executive"} for row in conn.execute(
+                """
+                SELECT e.id, e.username AS email, e.player_name, e.executive_role,
+                       e.created_at, COALESCE(p.instagram, '') AS instagram,
+                       COALESCE(NULLIF(e.phone, ''), p.phone, '') AS phone
+                FROM executive_users e
+                LEFT JOIN member_profiles p ON p.member_name = e.player_name COLLATE NOCASE
+                ORDER BY e.player_name COLLATE NOCASE, e.username COLLATE NOCASE
+                """
+            ).fetchall())
+        if account_filter in {"all", "player"}:
+            rows.extend(dict(row) | {"account_type": "player", "executive_role": ""} for row in conn.execute(
+                """
+                SELECT u.id, u.email, u.player_name, u.claim_status, u.created_at,
+                       COALESCE(p.instagram, '') AS instagram,
+                       COALESCE(NULLIF(u.phone, ''), p.phone, '') AS phone
+                FROM user_accounts u
+                LEFT JOIN member_profiles p ON p.member_name = u.player_name COLLATE NOCASE
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM executive_users e
+                    WHERE e.username = u.email COLLATE NOCASE
+                )
+                ORDER BY u.player_name COLLATE NOCASE, u.email COLLATE NOCASE
+                """
+            ).fetchall())
+    for row in rows:
+        row["display_phone"] = local_phone_display(row.get("phone", ""))
+    search_key = str(search or "").strip().casefold()
+    if search_key:
+        rows = [
+            row for row in rows
+            if search_key in " ".join(str(value or "") for value in (
+                row.get("player_name"), row.get("email"), row.get("phone"),
+                row.get("display_phone"), row.get("instagram"),
+                row.get("executive_role"), row.get("claim_status"),
+                row.get("account_type"),
+            )).casefold()
+        ]
+    return rows
+
+
+def managed_account(account_type, account_id):
+    try:
+        account_id = int(account_id)
+    except (TypeError, ValueError):
+        return None
+    return next(
+        (row for row in account_management_rows(account_type) if row["account_type"] == account_type and row["id"] == account_id),
+        None,
+    )
+
+
+def update_other_executive_role(executive_id, role, current_executive_id):
+    try:
+        executive_id = int(executive_id)
+        current_executive_id = int(current_executive_id)
+    except (TypeError, ValueError):
+        return False, "Executive account was not found."
+    if executive_id == current_executive_id:
+        return False, "You cannot change your own role from this page."
+    if str(role or "").strip() not in EXECUTIVE_ROLES:
+        return False, "Choose a valid executive role."
+    with closing(get_db()) as conn:
+        cursor = conn.execute(
+            "UPDATE executive_users SET executive_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (role, executive_id),
+        )
+        conn.commit()
+    return (True, "Executive role updated.") if cursor.rowcount else (False, "Executive account was not found.")
+
+
+def delete_other_executive(executive_id, current_executive_id):
+    try:
+        executive_id = int(executive_id)
+        current_executive_id = int(current_executive_id)
+    except (TypeError, ValueError):
+        return False, "Executive account was not found."
+    if executive_id == current_executive_id:
+        return False, "You cannot delete your own account."
+    with closing(get_db()) as conn:
+        cursor = conn.execute("DELETE FROM executive_users WHERE id = ?", (executive_id,))
+        conn.commit()
+    return (True, "Executive account deleted.") if cursor.rowcount else (False, "Executive account was not found.")
 
 
 def executive_request_email_body(request_info, prefix):
@@ -1026,6 +1747,22 @@ def login_executive(user):
     session["executive_player_name"] = user["player_name"] or ""
     session["executive_role"] = clean_executive_role(user["executive_role"])
     mark_executive_login(user["id"])
+
+
+@app.before_request
+def refresh_approved_executive_session():
+    """Promote an authenticated user session after its executive request is approved."""
+    if session.get("executive_user_id") or not session.get("user_account_id"):
+        return
+
+    user = current_user_account()
+    if not user:
+        session.clear()
+        return
+
+    executive = get_executive_user(user["email"])
+    if executive:
+        login_executive(executive)
 
 
 def is_executive_logged_in():
@@ -1209,6 +1946,9 @@ def ensure_bracket_settings_schema(conn):
             qr_color TEXT NOT NULL DEFAULT '#ffffff',
             qr_background_color TEXT NOT NULL DEFAULT '#000000',
             logo_filename TEXT NOT NULL DEFAULT 'logo.png',
+            timezone TEXT NOT NULL DEFAULT 'Australia/Brisbane',
+            competition_end_time TEXT NOT NULL DEFAULT '22:00',
+            payout_presets TEXT NOT NULL DEFAULT '[]',
             version INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -1223,6 +1963,19 @@ def ensure_bracket_settings_schema(conn):
 
     if "logo_filename" not in columns:
         conn.execute("ALTER TABLE bracket_settings ADD COLUMN logo_filename TEXT NOT NULL DEFAULT 'logo.png'")
+
+    if "timezone" not in columns:
+        conn.execute("ALTER TABLE bracket_settings ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Australia/Brisbane'")
+
+    if "competition_end_time" not in columns:
+        conn.execute("ALTER TABLE bracket_settings ADD COLUMN competition_end_time TEXT NOT NULL DEFAULT '22:00'")
+
+    if "payout_presets" not in columns:
+        conn.execute("ALTER TABLE bracket_settings ADD COLUMN payout_presets TEXT NOT NULL DEFAULT '[]'")
+        conn.execute(
+            "UPDATE bracket_settings SET payout_presets = ?",
+            (json_dumps_compact(DEFAULT_PAYOUT_PRESETS),),
+        )
 
     qr_columns = {
         "qr_page_name": "TEXT NOT NULL DEFAULT ''",
@@ -1241,8 +1994,8 @@ def ensure_bracket_settings_schema(conn):
             id, highlight_color, remove_hover_color,
             table_badge_background, table_badge_text,
             qr_page_name, qr_link, qr_name_position, qr_color,
-            qr_background_color, logo_filename, version, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            qr_background_color, logo_filename, timezone, competition_end_time, payout_presets, version, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
         """,
         (
             BRACKET_SETTINGS_ID,
@@ -1256,6 +2009,9 @@ def ensure_bracket_settings_schema(conn):
             DEFAULT_BRACKET_SETTINGS["qr_color"],
             DEFAULT_BRACKET_SETTINGS["qr_background_color"],
             DEFAULT_BRACKET_SETTINGS["logo_filename"],
+            DEFAULT_BRACKET_SETTINGS["timezone"],
+            DEFAULT_BRACKET_SETTINGS["competition_end_time"],
+            json_dumps_compact(DEFAULT_PAYOUT_PRESETS),
         )
     )
 
@@ -1998,10 +2754,24 @@ def read_only_profiles_for_game_player(display_name):
     with closing(get_db()) as conn:
         rows = conn.execute(
             """
-            SELECT member_name, is_member, profile_image, instagram, phone, email,
-                   notes, first_seen_at, last_seen_at
-            FROM member_profiles
-            ORDER BY member_name COLLATE NOCASE
+            SELECT p.member_name, p.is_member, p.profile_image, p.instagram,
+                   COALESCE(
+                       NULLIF((SELECT e.phone FROM executive_users e
+                               WHERE e.player_name = p.member_name COLLATE NOCASE LIMIT 1), ''),
+                       NULLIF((SELECT u.phone FROM user_accounts u
+                               WHERE u.player_name = p.member_name COLLATE NOCASE LIMIT 1), ''),
+                       p.phone
+                   ) AS phone,
+                   COALESCE(
+                       NULLIF((SELECT e.username FROM executive_users e
+                               WHERE e.player_name = p.member_name COLLATE NOCASE LIMIT 1), ''),
+                       NULLIF((SELECT u.email FROM user_accounts u
+                               WHERE u.player_name = p.member_name COLLATE NOCASE LIMIT 1), ''),
+                       p.email
+                   ) AS email,
+                   p.notes, p.first_seen_at, p.last_seen_at
+            FROM member_profiles p
+            ORDER BY p.member_name COLLATE NOCASE
             """
         ).fetchall()
 
@@ -2077,6 +2847,43 @@ def save_member_profile_image(upload):
     return True, f"member-profiles/{filename}"
 
 
+def clean_payout_presets(value):
+    source = value if isinstance(value, list) else json_loads_or_default(value, [])
+    presets = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        try:
+            player_count = max(1, min(999, int(item.get("player_count", 0))))
+        except (TypeError, ValueError):
+            continue
+        presets.append({
+            "player_count": player_count,
+            "first": clean_money_value(item.get("first")),
+            "second": clean_money_value(item.get("second")),
+            "third": clean_money_value(item.get("third")),
+        })
+    return presets[:50]
+
+
+def payout_presets_from_form(form):
+    if not hasattr(form, "getlist"):
+        return clean_payout_presets(form.get("payout_presets", DEFAULT_PAYOUT_PRESETS))
+    counts = form.getlist("preset_player_count")
+    first = form.getlist("preset_first")
+    second = form.getlist("preset_second")
+    third = form.getlist("preset_third")
+    return clean_payout_presets([
+        {
+            "player_count": count,
+            "first": first[index] if index < len(first) else 0,
+            "second": second[index] if index < len(second) else 0,
+            "third": third[index] if index < len(third) else 0,
+        }
+        for index, count in enumerate(counts)
+    ])
+
+
 def load_bracket_settings():
     with closing(get_db()) as conn:
         ensure_bracket_settings_schema(conn)
@@ -2085,7 +2892,7 @@ def load_bracket_settings():
             SELECT highlight_color, remove_hover_color,
                    table_badge_background, table_badge_text,
                    qr_page_name, qr_link, qr_name_position, qr_color,
-                   qr_background_color, logo_filename, version
+                   qr_background_color, logo_filename, timezone, competition_end_time, payout_presets, version
             FROM bracket_settings
             WHERE id = ?
             """,
@@ -2106,6 +2913,12 @@ def load_bracket_settings():
             row["qr_background_color"], DEFAULT_BRACKET_SETTINGS["qr_background_color"]
         )
         settings["logo_filename"] = clean_logo_filename(row["logo_filename"])
+        settings["timezone"] = row["timezone"] if row["timezone"] in VALID_TIMEZONES else DEFAULT_BRACKET_SETTINGS["timezone"]
+        settings["competition_end_time"] = row["competition_end_time"] if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(row["competition_end_time"] or "")) else DEFAULT_BRACKET_SETTINGS["competition_end_time"]
+        settings["payout_presets"] = (
+            clean_payout_presets(row["payout_presets"])
+            or clean_payout_presets(DEFAULT_PAYOUT_PRESETS)
+        )
         settings["_version"] = int(row["version"] or 0)
     else:
         settings["_version"] = 0
@@ -2126,6 +2939,13 @@ def save_bracket_settings(form, logo_filename=None):
     values["qr_background_color"] = clean_css_color(
         form.get("qr_background_color"), DEFAULT_BRACKET_SETTINGS["qr_background_color"]
     )
+    values["timezone"] = str(form.get("timezone", ""))
+    if values["timezone"] not in VALID_TIMEZONES:
+        values["timezone"] = DEFAULT_BRACKET_SETTINGS["timezone"]
+    values["competition_end_time"] = str(form.get("competition_end_time", ""))
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", values["competition_end_time"]):
+        values["competition_end_time"] = DEFAULT_BRACKET_SETTINGS["competition_end_time"]
+    values["payout_presets"] = payout_presets_from_form(form)
 
     with closing(get_db()) as conn:
         ensure_bracket_settings_schema(conn)
@@ -2149,6 +2969,9 @@ def save_bracket_settings(form, logo_filename=None):
                 qr_color = ?,
                 qr_background_color = ?,
                 logo_filename = ?,
+                timezone = ?,
+                competition_end_time = ?,
+                payout_presets = ?,
                 version = version + 1,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -2164,6 +2987,9 @@ def save_bracket_settings(form, logo_filename=None):
                 values["qr_color"],
                 values["qr_background_color"],
                 values["logo_filename"],
+                values["timezone"],
+                values["competition_end_time"],
+                json_dumps_compact(values["payout_presets"]),
                 BRACKET_SETTINGS_ID,
             )
         )
@@ -2297,22 +3123,20 @@ def clean_comp_size(value, fallback=64):
         size = int(value)
     except (TypeError, ValueError):
         size = int(fallback or 64)
-
-    if size in PRESET_WINNINGS:
-        return size
-
-    if size <= 32:
-        return 32
-
-    if size <= 48:
-        return 48
-
-    return 64
+    return max(1, min(999, size))
 
 
 def default_comp_size_for_players(players):
     entry_count = len({player["slot_id"] for player in players})
-    return clean_comp_size(entry_count)
+    return clean_comp_size(entry_count, 1)
+
+
+def legacy_preset_for_player_count(player_count):
+    if player_count <= 32:
+        return dict(PRESET_WINNINGS[32])
+    if player_count <= 48:
+        return dict(PRESET_WINNINGS[48])
+    return dict(PRESET_WINNINGS[64])
 
 
 def clean_payout_mode(value):
@@ -2740,18 +3564,24 @@ def winner_choice_key(name):
 
 
 def payout_prizes_for_state(finance_state, players):
-    comp_size = clean_comp_size(
-        finance_state.get("comp_size"),
-        default_comp_size_for_players(players)
-    )
+    comp_size = default_comp_size_for_players(players)
     mode = clean_payout_mode(finance_state.get("payout_mode"))
+    prizes = {
+        place: clean_money_value(finance_state.get("prizes", {}).get(place, 0))
+        for place in PAYOUT_PLACES
+    }
 
-    if mode == "preset":
-        prizes = dict(PRESET_WINNINGS[comp_size])
-    else:
+    player_count_changed = clean_comp_size(finance_state.get("comp_size")) != comp_size
+    matching_preset = next((
+        preset for preset in load_bracket_settings().get("payout_presets", [])
+        if preset["player_count"] == comp_size
+    ), None)
+    if matching_preset and (player_count_changed or mode == "preset"):
+        mode = "preset"
         prizes = {
-            place: clean_money_value(finance_state.get("prizes", {}).get(place, 0))
-            for place in PAYOUT_PLACES
+            1: matching_preset["first"],
+            2: matching_preset["second"],
+            3: matching_preset["third"],
         }
 
     return comp_size, mode, prizes
@@ -3126,6 +3956,12 @@ def finance_entries_from_players(players):
             2
         )
 
+    for entry in entries:
+        entry["players"].sort(key=lambda player: str(player.get("name", "")).casefold())
+    entries.sort(key=lambda entry: min(
+        (str(player.get("name", "")).casefold() for player in entry["players"]),
+        default="",
+    ))
     return entries
 
 
@@ -3139,23 +3975,27 @@ def finance_summary():
     comp_date = clean_date_key(finance_state.get("comp_date"))
     automatic_winners, round_robin_three_way_tie = automatic_winners_from_round_robin(state)
     automatic_winners = automatic_winners or automatic_winners_from_knockout(state)
-    winners = automatic_winners or clean_winner_map(finance_state.get("winners"))
+    winners = automatic_winners or clean_winner_map({})
     active_keys = {player["key"] for player in players}
     payments = {
         key: paid
         for key, paid in finance_state.get("payments", {}).items()
         if key in active_keys
     }
-    paid_count = sum(1 for paid in payments.values() if paid)
+    current_paid_count = sum(1 for paid in payments.values() if paid)
 
     for player in players:
         player["paid"] = bool(payments.get(player["key"]))
         player["fee"] = payment_fee_for_player(player, doubles_comp)
 
-    total_income = round(
+    current_entry_income = round(
         sum(player["fee"] for player in players if player["paid"]),
         2
     )
+    debt_collections = debt_collections_for_date(comp_date)
+    debt_income = round(sum(clean_money_value(item["amount"]) for item in debt_collections), 2)
+    total_income = round(current_entry_income + debt_income, 2)
+    paid_count = current_paid_count + len(debt_collections)
     entries = finance_entries_from_players(players)
     if round_robin_three_way_tie:
         payout_rows = payout_rows_for_round_robin_tie(winners, prizes, entries, comp_date)
@@ -3175,7 +4015,7 @@ def finance_summary():
             if winner_choice_name(entry)
         ],
         "doubles_comp": doubles_comp,
-        "preset_winnings": PRESET_WINNINGS,
+        "payout_presets": load_bracket_settings().get("payout_presets", []),
         "payout_mode": payout_mode,
         "comp_size": comp_size,
         "default_comp_size": default_size,
@@ -3188,9 +4028,12 @@ def finance_summary():
         "payout_rows": payout_rows,
         "winnings_total": winnings_total,
         "paid_count": paid_count,
-        "unpaid_count": len(players) - paid_count,
+        "unpaid_count": len(players) - current_paid_count,
         "total_players": len(players),
         "total_income": total_income,
+        "current_entry_income": current_entry_income,
+        "debt_income": debt_income,
+        "debt_collections": debt_collections,
         "profit_loss": round(total_income - winnings_total, 2),
         "winner_history": winner_history_grid(),
     }
@@ -4898,23 +5741,27 @@ def bracket():
 
 @app.route("/user_login", methods=["POST"])
 def user_login():
-    email = request.form.get("email", "")
+    identifier = request.form.get("identifier", "")
     password = request.form.get("password", "")
-    user = get_user_account(email)
-
-    if user and check_password_hash(user["password_hash"], password):
-        login_user_account(user)
-        return redirect(url_for("register"))
-
-    executive = get_executive_user(email)
-
-    if executive and check_password_hash(executive["password_hash"], password):
+    executive = next(
+        (row for row in executive_users_for_login(identifier) if check_password_hash(row["password_hash"], password)),
+        None,
+    )
+    if executive:
         login_executive(executive)
         return redirect(url_for("executive_games"))
 
+    user = next(
+        (row for row in user_accounts_for_login(identifier) if check_password_hash(row["password_hash"], password)),
+        None,
+    )
+    if user:
+        login_user_account(user)
+        return redirect(url_for("register"))
+
     return redirect(url_for(
         "landing",
-        error="Email or password is incorrect."
+        error="Email, phone number, or password is incorrect."
     ))
 
 
@@ -4938,6 +5785,7 @@ def user_signup():
                 request.form.get("password", ""),
                 request.form.get("player_name", ""),
                 profile_image,
+                request.form.get("phone", ""),
             )
         else:
             success, result = False, error
@@ -4962,6 +5810,108 @@ def user_logout():
     return redirect(url_for("landing"))
 
 
+@app.route("/account", methods=["GET", "POST"])
+def own_account():
+    if session.get("executive_user_id"):
+        account_type = "executive"
+        account = current_executive_user()
+        email = account["username"] if account else ""
+    elif session.get("user_account_id"):
+        account_type = "player"
+        account = current_user_account()
+        email = account["email"] if account else ""
+    else:
+        return redirect(url_for("landing", error="Log in to manage your account."))
+
+    if not account:
+        session.clear()
+        return redirect(url_for("landing", error="Account was not found."))
+
+    error = ""
+    message = request.args.get("message", "")
+    if request.method == "POST":
+        action = request.form.get("action", "update_details")
+        if action == "request_executive" and account_type == "player":
+            success, result = create_executive_request_for_user(
+                account["id"], request.form.get("executive_role", EXECUTIVE_ROLES[0])
+            )
+            if success:
+                return redirect(url_for("own_account", message=result))
+            error = result
+        elif action == "update_details":
+            success, result = update_own_profile(
+                account_type, account, request.form.get("instagram", ""),
+                request.files.get("profile_image"),
+            )
+            if success:
+                success, result = update_own_account(
+                    account_type,
+                    account["id"],
+                    request.form.get("email", ""),
+                    request.form.get("phone", ""),
+                )
+        else:
+            success, result = False, "Invalid account action."
+        if action == "update_details" and success:
+            if account_type == "executive":
+                session["executive_username"] = result["email"]
+            else:
+                session["user_email"] = result["email"]
+            return redirect(url_for("own_account", message="Account details updated."))
+        error = result
+
+    account_profile = load_account_profile(account)
+    return render_template(
+        "account.html",
+        account=account,
+        account_type=account_type,
+        account_email=email,
+        account_profile=account_profile,
+        account_profile_image_url=(
+            url_for("asset_file", filename=account_profile["profile_image"])
+            if account_profile["profile_image"] else ""
+        ),
+        executive_roles=EXECUTIVE_ROLES,
+        pending_executive_request=(
+            pending_executive_request_for_email(account["email"])
+            if account_type == "player" else None
+        ),
+        error=error,
+        message=message,
+    )
+
+
+@app.route("/account/password", methods=["GET", "POST"])
+def change_password():
+    if session.get("executive_user_id"):
+        account_type = "executive"
+        account = current_executive_user()
+    elif session.get("user_account_id"):
+        account_type = "player"
+        account = current_user_account()
+    else:
+        return redirect(url_for("landing", error="Log in to manage your account."))
+
+    if not account:
+        session.clear()
+        return redirect(url_for("landing", error="Account was not found."))
+
+    error = ""
+    if request.method == "POST":
+        success, result = change_own_password(
+            account_type,
+            account["id"],
+            request.form.get("current_password", ""),
+            request.form.get("new_password", ""),
+            request.form.get("confirm_password", ""),
+        )
+        if success:
+            return redirect(url_for("own_account", message=result))
+        error = result
+
+    return render_template("change_password.html", error=error)
+
+
 @app.route("/executive_login", methods=["GET", "POST"])
 def executive_login():
     has_executive_users = executive_user_count() > 0
@@ -4970,23 +5920,26 @@ def executive_login():
     message = request.args.get("message", "")
 
     if request.method == "POST":
-        username = clean_username(request.form.get("username"))
+        username = request.form.get("identifier", "")
         password = request.form.get("password", "")
 
         if has_executive_users:
-            user = get_executive_user(username)
+            user = next(
+                (row for row in executive_users_for_login(username) if check_password_hash(row["password_hash"], password)),
+                None,
+            )
 
-            if user and check_password_hash(user["password_hash"], password):
+            if user:
                 login_executive(user)
                 return redirect(next_url)
 
-            error = "Username or password is incorrect."
+            error = "Email, phone number, or password is incorrect."
         else:
             success, result = create_executive_user(
-                username,
+                clean_username(username),
                 password,
                 request.form.get("player_name", ""),
-                request.form.get("executive_role", EXECUTIVE_ROLES[0])
+                request.form.get("executive_role", EXECUTIVE_ROLES[0]),
             )
 
             if success:
@@ -5013,61 +5966,86 @@ def executive_logout():
     return redirect(url_for("landing"))
 
 
-@app.route("/executive_signup", methods=["GET", "POST"])
-def executive_signup():
-    if executive_user_count() == 0:
-        return redirect(url_for("executive_login", next=request.args.get("next") or url_for("executive_games")))
-
-    error = ""
-
-    if request.method == "POST":
-        success, result = create_executive_request(
-            request.form.get("email", ""),
-            request.form.get("password", ""),
-            request.form.get("new_player_name", "").strip()
-            or request.form.get("known_player_name", ""),
-            request.form.get("executive_role", EXECUTIVE_ROLES[0])
-        )
-
-        if success:
-            return redirect(url_for(
-                "executive_login",
-                message="Your request has been sent to the current executives."
-            ))
-
-        error = result
-
-    return render_template(
-        "executive_signup.html",
-        error=error,
-        known_player_names=load_known_player_names(),
-        executive_roles=EXECUTIVE_ROLES,
-    )
-
-
 @app.route("/executive_requests", methods=["GET", "POST"])
 @executive_login_required
 def executive_requests_route():
-    message = ""
-    error = ""
-
     if request.method == "POST":
-        success, result = resolve_executive_request(
-            request.form.get("request_id"),
-            request.form.get("action"),
-            session.get("executive_username", "")
-        )
+        action = request.form.get("action", "")
+        account_type = request.form.get("account_type", "")
+        account_id = request.form.get("account_id") or request.form.get("request_id")
+        target_account = managed_account(account_type, account_id)
+        success = False
+        result = "Invalid account action."
 
-        if success:
-            message = f"Request {result}."
-        else:
-            error = result
+        if action in {"approve", "deny"} and account_type == "requested_executive":
+            success, result = resolve_executive_request(
+                account_id, action, session.get("executive_username", "")
+            )
+            if success:
+                result = f"Request {result}."
+        elif action == "update_role" and account_type == "executive":
+            success, result = update_other_executive_role(
+                account_id, request.form.get("executive_role"), session.get("executive_user_id")
+            )
+            if success and target_account:
+                log_executive_action(
+                    "account_updated",
+                    f"changed {target_account.get('player_name') or target_account.get('email')}'s executive role to {request.form.get('executive_role')}",
+                )
+        elif action == "delete" and account_type == "executive":
+            success, result = delete_other_executive(account_id, session.get("executive_user_id"))
+            if success and target_account:
+                log_executive_action(
+                    "account_deleted",
+                    f"deleted {target_account.get('player_name') or target_account.get('email')}'s executive account",
+                )
+        elif action == "send_message":
+            account = managed_account(account_type, account_id)
+            channel = request.form.get("channel", "email")
+            message_body = str(request.form.get("message_body", "")).strip()[:4000]
+            if not account:
+                result = "Account was not found."
+            elif not message_body:
+                result = "Enter a message."
+            elif channel == "email":
+                subject = str(request.form.get("subject", "")).strip()[:160] or "Message from QUT Pool Club"
+                success = send_email([account.get("email", "")], subject, message_body)
+                result = "Email sent." if success else "Email could not be sent. Check the SMTP configuration."
+            elif channel == "sms":
+                success = send_sms(account.get("phone", ""), message_body)
+                result = "SMS sent." if success else "SMS could not be sent. Check the phone number and Twilio configuration."
+            if success:
+                log_executive_action(
+                    "message_sent",
+                    f"sent {channel} to {account.get('player_name') or account.get('email')}",
+                )
 
+        account_filter = request.form.get("account_filter", "all")
+        return redirect(url_for(
+            "executive_requests_route",
+            account_filter=account_filter,
+            **({"message": result} if success else {"error": result}),
+        ))
+
+    account_filter = request.args.get("account_filter", "all")
+    if account_filter not in {"all", "requested_executive", "executive", "player"}:
+        account_filter = "all"
+    search = request.args.get("search", "").strip()[:120]
+    accounts = account_management_rows(account_filter, search)
+    counts = {
+        kind: len(account_management_rows(kind))
+        for kind in ("requested_executive", "executive", "player")
+    }
     return render_template(
         "executive_requests.html",
-        requests=pending_executive_requests(),
-        message=message,
-        error=error,
+        accounts=accounts,
+        account_filter=account_filter,
+        search=search,
+        counts=counts,
+        executive_roles=EXECUTIVE_ROLES,
+        current_executive_id=int(session.get("executive_user_id")),
+        message=request.args.get("message", ""),
+        error=request.args.get("error", ""),
     )
 
 
@@ -5085,6 +6063,7 @@ def database_browser(table_name=None):
 @executive_login_required
 def bracket_settings():
     if request.method == "POST":
+        previous_settings = load_bracket_settings()
         if request.form.get("action") == "reset":
             settings = save_bracket_settings(
                 DEFAULT_BRACKET_SETTINGS,
@@ -5111,6 +6090,25 @@ def bracket_settings():
                     logo_filename = requested_logo
             settings = save_bracket_settings(request.form, logo_filename)
 
+        previous_qr = str(previous_settings.get("qr_link", "") or "").strip()
+        current_qr = str(settings.get("qr_link", "") or "").strip()
+        if previous_qr != current_qr:
+            qr_action = "qr_added" if not previous_qr else "qr_removed" if not current_qr else "qr_updated"
+            qr_verb = {"qr_added": "added", "qr_updated": "updated", "qr_removed": "removed"}[qr_action]
+            log_executive_action(qr_action, f"{qr_verb} the QR code")
+
+        previous_logo = str(previous_settings.get("logo_filename", "") or "")
+        current_logo = str(settings.get("logo_filename", "") or "")
+        if previous_logo != current_logo:
+            default_logo = DEFAULT_BRACKET_SETTINGS["logo_filename"]
+            logo_action = (
+                "logo_added" if previous_logo in {"", default_logo} and current_logo not in {"", default_logo}
+                else "logo_removed" if current_logo in {"", default_logo}
+                else "logo_updated"
+            )
+            logo_verb = {"logo_added": "added", "logo_updated": "updated", "logo_removed": "removed"}[logo_action]
+            log_executive_action(logo_action, f"{logo_verb} the logo image")
+
         if wants_json_response():
             return {**settings, "_version": load_bracket_settings().get("_version", 0)}
 
@@ -5125,6 +6123,7 @@ def bracket_settings():
         error=request.args.get("error", ""),
         defaults=DEFAULT_BRACKET_SETTINGS,
         presets=BRACKET_COLOR_PRESETS,
+        timezone_options=TIMEZONE_OPTIONS,
         logo_history=available_competition_logos(),
         executive_profiles=executive_profiles(),
     )
@@ -5228,6 +6227,7 @@ def game_action_route():
     match_id = request.form.get("match_id", "")
     game_filter = request.form.get("filter", "all")
     state = normalize_state(load_state() or empty_state())
+    removed_players = []
 
     if action == "start":
         success, result = start_game_in_state(
@@ -5252,18 +6252,35 @@ def game_action_route():
     elif action == "reset_round_robin_final":
         success, result = reset_round_robin_final_in_state(state)
     elif action == "delete_first_round_player":
+        removed_name = slot_name(state, request.form.get("slot_id", ""))
+        if removed_name:
+            removed_players = [removed_name]
         success, result = delete_first_round_player_in_state(
             state,
             match_id,
             request.form.get("slot_id", "")
         )
     elif action == "delete_first_round":
+        existing_game = game_for_match_id(state, match_id)
+        removed_players = [
+            player.get("name", "") for player in (existing_game or {}).get("players", [])
+            if player.get("name", "")
+        ]
         success, result = delete_first_round_game_in_state(state, match_id)
     else:
         success, result = False, "Unknown game action"
 
     if success:
         save_state(result)
+        if removed_players:
+            for player_name in removed_players:
+                log_executive_action("player_removed", f"removed {player_name}")
+        else:
+            readable_action = str(action or "action").replace("_", " ")
+            log_executive_action(
+                "game_action",
+                f"performed {readable_action} on {match_id}",
+            )
 
     return redirect(url_for("executive_games", filter=game_filter))
 
@@ -5317,35 +6334,25 @@ def payments():
         active_players = active_comp_players()
         state = normalize_state(load_state() or empty_state())
         paid_keys = set(request.form.getlist("paid_player"))
-        comp_date = clean_date_key(request.form.get("comp_date"))
+        comp_date = clean_date_key(load_finance_state().get("comp_date") or most_recent_tuesday_key())
         payments = {
             player["key"]: player["key"] in paid_keys
             for player in active_players
         }
-        payout_mode = clean_payout_mode(request.form.get("payout_mode"))
-        comp_size = clean_comp_size(
-            request.form.get("comp_size"),
-            default_comp_size_for_players(active_players)
-        )
-
-        if payout_mode == "preset":
-            prizes = dict(PRESET_WINNINGS[comp_size])
-        else:
-            prizes = {
-                1: request.form.get("first_winnings", "0"),
-                2: request.form.get("second_winnings", "0"),
-                3: request.form.get("third_winnings", "0"),
-            }
-
-        winners = {
-            str(place): request.form.get(f"winner_{place}", "")
-            for place in PAYOUT_PLACES
+        comp_size = default_comp_size_for_players(active_players)
+        prizes = {
+            place: clean_money_value(request.form.get(f"{label}_winnings"))
+            for place, label in ((1, "first"), (2, "second"), (3, "third"))
         }
+        configured_presets = load_bracket_settings().get("payout_presets", [])
+        payout_mode = "preset" if any(
+            preset["player_count"] == comp_size
+            and prizes == {1: preset["first"], 2: preset["second"], 3: preset["third"]}
+            for preset in configured_presets
+        ) else "custom"
         automatic_winners, _ = automatic_winners_from_round_robin(state)
         automatic_winners = automatic_winners or automatic_winners_from_knockout(state)
-
-        if automatic_winners:
-            winners = automatic_winners
+        winners = automatic_winners
 
         save_finance_state(
             0,
@@ -5356,6 +6363,8 @@ def payments():
             winners,
             comp_date
         )
+        if competition_is_active():
+            save_debt_collections(comp_date, request.form.getlist("debt_payment"))
         summary = finance_summary()
         save_comp_results_and_snapshot(summary)
 
@@ -5369,6 +6378,9 @@ def payments():
         "payments.html",
         summary=summary,
         report_week_options=tuesday_week_options(summary.get("comp_date")),
+        historical_debts=historical_player_debts(summary.get("comp_date")),
+        payment_debt_entries=payment_debt_entries(summary.get("comp_date")),
+        debt_tracking_active=competition_is_active(),
     )
 
 
@@ -5445,6 +6457,16 @@ def register():
         )
 
         if action == "end_comp":
+            completed_state = normalize_state(load_state() or empty_state())
+            completed_registration = load_registration_state()
+            completed_finance = finance_summary()
+            save_comp_results_and_snapshot(completed_finance)
+            log_executive_action("competition_ended", "ended the competition")
+            save_competition_history_snapshot(
+                completed_state,
+                completed_registration,
+                completed_finance,
+            )
             save_state(empty_state())
             save_registration_state(
                 {field: "" for field in REGISTRATION_FIELDS},
@@ -5480,9 +6502,29 @@ def register():
             add_known_players(known_player_names_from_entries(raw_name for raw_name, _ in player_entries))
             ensure_players_exist(players)
             save_state(state)
+            automatic_comp_size = default_comp_size_for_players(active_comp_players())
+            save_finance_state(
+                0, {}, "preset", automatic_comp_size,
+                next(
+                    (
+                        {1: preset["first"], 2: preset["second"], 3: preset["third"]}
+                        for preset in load_bracket_settings().get("payout_presets", [])
+                        if preset["player_count"] == automatic_comp_size
+                    ),
+                    legacy_preset_for_player_count(automatic_comp_size),
+                ), {}, most_recent_tuesday_key(),
+            )
             save_registration_state(
                 {field: "" for field in REGISTRATION_FIELDS},
                 registration_client_id
+            )
+
+            for raw_name, _ in player_entries:
+                for player_name in known_player_names_from_entries([raw_name]):
+                    log_executive_action("player_registered", f"registered {player_name}")
+            log_executive_action(
+                "competition_started",
+                f"started the competition with {len(players)} players",
             )
 
             return redirect(url_for("register"))
@@ -5514,6 +6556,12 @@ def register():
             registration_updates["late_players"] = ""
             save_registration_state(registration_updates, registration_client_id)
 
+            added_names = known_player_names_from_entries(raw_name for raw_name, _ in added_entries)
+            if added_names:
+                log_executive_action(
+                    "late_players_added", f"added late players: {', '.join(added_names)}"
+                )
+
             return redirect(url_for("register"))
 
         if action == "add_buybacks":
@@ -5542,6 +6590,12 @@ def register():
             save_state(state)
             registration_updates["buybacks"] = ""
             save_registration_state(registration_updates, registration_client_id)
+
+            added_names = known_player_names_from_entries(raw_name for raw_name, _ in added_entries)
+            if added_names:
+                log_executive_action(
+                    "buybacks_added", f"added buybacks: {', '.join(added_names)}"
+                )
 
             return redirect(url_for("register"))
 
@@ -5665,6 +6719,10 @@ def edit_members():
         save_members(edited_members)
         save_known_player_names(edited_members + edited_known_non_members)
         touch_registration_state()
+        log_executive_action(
+            "members_updated",
+            f"updated the member list ({len(edited_members)} members, {len(edited_known_non_members)} non-members)",
+        )
         return redirect(url_for("register"))
 
     members = load_members()
@@ -5693,6 +6751,7 @@ def remove_first_round_player_route():
 
     save_state(state)
     touch_registration_state()
+    log_executive_action("player_removed", f"removed {result}")
 
     return {
         "success": True,
@@ -5715,7 +6774,111 @@ def record_match_result_route():
     if not success:
         return {"success": False, "error": result}, 400
 
+    log_executive_action(
+        "game_action",
+        f"recorded {incoming.get('winner_name', '')} defeating {incoming.get('loser_name', '')} in {incoming.get('match_id', '')}",
+    )
     return {"success": True, **result}
+
+
+@app.route("/actions")
+@executive_login_required
+def executive_actions():
+    action_type = request.args.get("action_type", "")
+    executive = request.args.get("executive", "")
+    search = request.args.get("search", "").strip()
+    actions, executives = load_executive_actions()
+    display_settings = load_bracket_settings()
+    return render_template(
+        "actions.html",
+        actions=actions,
+        executives=executives,
+        action_types=ACTION_TYPE_LABELS,
+        selected_action_type=action_type,
+        selected_executive=executive,
+        search=search,
+        timezone=display_settings["timezone"],
+        competition_end_time=display_settings["competition_end_time"],
+    )
+
+
+@app.route("/comp_history", methods=["GET", "POST"])
+@executive_login_required
+def competition_history():
+    if request.method == "POST":
+        save_manual_competition_history(request.form)
+        return redirect(url_for("competition_history", message="Competition history entry added."))
+    history_settings = load_bracket_settings()
+    entries = competition_history_entries()
+    try:
+        selected_id = int(request.args.get("history_id", ""))
+    except (TypeError, ValueError):
+        selected_id = entries[0]["id"] if entries else 0
+    selected = next((item for item in entries if item["id"] == selected_id), entries[0] if entries else None)
+    history_groups = all_game_groups_for_state(normalize_state(selected["bracket_state"])) if selected and selected["source"] == "automatic" else []
+    history_payments = []
+    if selected:
+        history_payments = sorted(
+            selected.get("finance", {}).get("players", []),
+            key=lambda player: (bool(player.get("paid")), str(player.get("name", "")).casefold()),
+        )
+    return render_template(
+        "competition_history.html",
+        entries=entries,
+        selected=selected,
+        history_groups=history_groups,
+        history_payments=history_payments,
+        history_bracket_url=(url_for("competition_history_bracket", history_id=selected["id"]) if selected and selected["source"] == "automatic" else ""),
+        message=request.args.get("message", ""),
+        default_date=most_recent_tuesday_key(),
+        timezone=(selected.get("settings", {}).get("timezone") if selected else None) or history_settings["timezone"],
+    )
+
+
+@app.route("/comp_history/<int:history_id>/bracket_display")
+@executive_login_required
+def competition_history_bracket(history_id):
+    history = next((item for item in competition_history_entries() if item["id"] == history_id), None)
+    if not history or history["source"] != "automatic":
+        return "Archived bracket was not found.", 404
+    state = normalize_state(history["bracket_state"])
+    normalize_active_tables(state)
+    state["round_robin_scoreboard"] = (
+        knockout_finals_scoreboard_for_state(state)
+        or round_robin_scoreboard_for_state(state)
+    )
+    settings = {**DEFAULT_BRACKET_SETTINGS, **history.get("settings", {})}
+    settings.setdefault("_version", 0)
+    return render_template(
+        "bracket.html",
+        bracket_data=state,
+        bracket_settings=settings,
+        bracket_user_logged_in=True,
+        bracket_archived=True,
+        bracket_return_url=url_for("competition_history", history_id=history_id),
+        competition=competition_context_for_date(history["comp_date"]),
+    )
+
+
+@app.route("/comp_history/<int:history_id>/payments.pdf")
+@executive_login_required
+def competition_history_payment_report(history_id):
+    with closing(get_db()) as conn:
+        ensure_competition_history_schema(conn)
+        row = conn.execute(
+            "SELECT comp_date, payment_report FROM competition_history WHERE id = ?",
+            (history_id,),
+        ).fetchone()
+
+    if not row or not row["payment_report"]:
+        return "Archived payment report was not found.", 404
+
+    filename = f"pool-payments-{clean_date_key(row['comp_date'])}.pdf"
+    return Response(
+        bytes(row["payment_report"]),
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route("/rankings")

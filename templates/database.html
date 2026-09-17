@@ -48,7 +48,7 @@
 <body>
   {% include "_executive_sidebar.html" %}
   <header>
-    <h1>Database</h1>
+    <div><h1>Database</h1><p class="page-date">{{ competition.display }}</p></div>
     <div class="nav-actions"><a href="{{ url_for('bracket') }}">Bracket Display</a></div>
   </header>
   <main>

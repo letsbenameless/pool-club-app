@@ -1,6 +1,20 @@
-﻿pool_comp.sqlite3
-known_players.json
+# Runtime databases and backups (contain accounts, password hashes and contact data)
+*.sqlite3
+*.sqlite3-*
+
+# Local secrets and private competition/member data
 .flask_secret_key
+known_players.json
+members.json
+bracket_state.json
+elo-ratings.csv
+
+# Keep the assets directory itself, but never commit its contents
+assets/*
+!assets/.gitkeep
+*.uploading
+
+# Python environments and caches
 __pycache__/
 venv/
 *.pyc

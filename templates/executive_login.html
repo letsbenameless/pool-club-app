@@ -120,8 +120,8 @@
       <input type="hidden" name="next" value="{{ next_url }}">
 
       <label>
-        Email
-        <input name="username" type="email" autocomplete="username" required autofocus>
+        {% if setup_required %}Email{% else %}Email or phone number{% endif %}
+        <input name="identifier" type="{% if setup_required %}email{% else %}text{% endif %}" autocomplete="username" required autofocus>
       </label>
 
       {% if setup_required %}
@@ -161,9 +161,7 @@
         <button type="submit">{% if setup_required %}Create Login{% else %}Log In{% endif %}</button>
         {% if setup_required %}
           <a class="secondary" href="{{ url_for('bracket') }}">Bracket</a>
-        {% else %}
-          <a class="secondary" href="{{ url_for('executive_signup') }}">Request Account</a>
-        {% endif %}
+        {% else %}<a class="secondary" href="{{ url_for('landing') }}">Back</a>{% endif %}
       </div>
     </form>
   </main>

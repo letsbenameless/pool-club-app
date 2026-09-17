@@ -150,8 +150,8 @@
 
     <form method="POST" action="{{ url_for('user_login') }}" autocomplete="off">
       <label>
-        Email
-        <input name="email" type="email" autocomplete="username" required autofocus>
+        Email or phone number
+        <input name="identifier" type="text" autocomplete="username" required autofocus>
       </label>
 
       <label>
@@ -166,8 +166,7 @@
     </form>
 
     <div class="actions" style="margin-top: 12px;">
-      <a class="quiet" href="{{ url_for('user_signup') }}">Create User Account</a>
-      <a class="quiet" href="{{ url_for('executive_signup') }}">Create Executive Account</a>
+      <a class="quiet" href="{{ url_for('user_signup') }}">Create Account</a>
     </div>
   </main>
   <script>

@@ -51,7 +51,7 @@
 </head>
 <body>
   {% include "_executive_sidebar.html" %}
-  <header><h1>Player Registration Requests</h1></header>
+  <header><h1>Player Registration Requests</h1><p class="page-date">{{ competition.display }}</p></header>
   <main>
     {% if message %}<p class="message">{{ message }}</p>{% endif %}
     {% if error %}<p class="error">{{ error }}</p>{% endif %}

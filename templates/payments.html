@@ -126,12 +126,11 @@
     }
 
     .week-badge {
-      position: absolute;
-      left: 50%;
-      transform: translateX(-50%);
+      position: static;
+      margin-top: 4px;
       color: #aaa;
       font-size: 13px;
-      font-weight: bold;
+      font-weight: normal;
       white-space: nowrap;
     }
 
@@ -141,6 +140,15 @@
       gap: 8px;
       margin-bottom: 16px;
     }
+
+    .payment-player-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .payment-player-heading h2 { margin: 0; }
+    .payment-search { flex: 1 1 260px; max-width: 380px; }
+    .payment-search input { box-sizing: border-box; width: 100%; border: 1px solid #555; border-radius: 6px; background: #050505; color: #f5f5f5; padding: 9px 12px; font-size: 15px; }
+    .payment-search input:focus { border-color: #7CFF7C; outline: none; }
+    .payment-search-empty { margin-top: 10px; border: 1px dashed #444; border-radius: 6px; color: #999; padding: 10px; }
+    .historical-debt { color: #ff9b9b; font-weight: bold; }
+    .debt-weeks { color: #aaa; font-size: 12px; }
 
     .metric,
     .panel {
@@ -221,13 +229,6 @@
       min-width: min(100%, 280px);
     }
 
-    .mode-row,
-    .preset-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
     .choice {
       display: flex;
       align-items: center;
@@ -242,23 +243,29 @@
       accent-color: #7CFF7C;
     }
 
-    .preset-button {
-      border-color: #444;
-      background: #242424;
-      color: #f5f5f5;
-    }
-
-    .preset-button.active {
-      border-color: #7CFF7C;
-      background: #dfffdc;
-      color: #111;
-    }
-
     .prize-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 8px;
       grid-column: 1 / -1;
+    }
+
+    .payout-fields {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: center;
+    }
+
+    .payout-fields label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .payout-fields input {
+      width: 105px;
     }
 
     .notice {
@@ -346,8 +353,8 @@
     @media (max-width: 700px) {
       header {
         position: static;
-        align-items: flex-start;
-        flex-direction: column;
+        align-items: center;
+        flex-direction: row;
         margin-left: 0;
       }
 
@@ -397,7 +404,7 @@
       }
 
       .nav-actions {
-        width: 100%;
+        width: auto;
       }
 
       .week-badge {
@@ -407,7 +414,7 @@
 
       .nav-actions a,
       .nav-actions button {
-        flex: 1 1 auto;
+        flex: 0 0 auto;
         text-align: center;
       }
 
@@ -415,38 +422,24 @@
         margin-left: 0;
         padding: 12px;
       }
+      .payment-player-heading { align-items: stretch; flex-direction: column; }
+      .payment-search { flex: none; width: 100%; max-width: none; }
     }
   </style>
 </head>
 <body>
   {% include "_executive_sidebar.html" %}
   <header>
-    <h1>Payments</h1>
-    <div class="week-badge">{{ competition.display }}</div>
+    <div><h1>Payments</h1><div class="week-badge">{{ competition.display }}</div></div>
     <div class="nav-actions">
       <a href="{{ url_for('bracket') }}">Bracket Display</a>
     </div>
   </header>
 
   <main>
-    <div class="report-controls">
-      <label>
-        Weekly report
-        <select id="report-week-select" name="report_comp_date" form="payments-form">
-          {% for option in report_week_options %}
-            <option value="{{ option.date }}" {% if option.date == summary.comp_date %}selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <a class="download" id="download-weekly-report" href="{{ url_for('payments_pdf', comp_date=summary.comp_date) }}">Download Weekly Report</a>
-    </div>
-
     <form method="POST" id="payments-form">
+      <input type="hidden" name="comp_date" value="{{ summary.comp_date }}">
       <div class="summary">
-        <div class="metric">
-          <div class="metric-label">Players</div>
-          <div class="metric-value">{{ summary.total_players }}</div>
-        </div>
         <div class="metric">
           <div class="metric-label">Paid</div>
           <div class="metric-value" data-paid-count>{{ summary.paid_count }}</div>
@@ -468,69 +461,6 @@
       </div>
 
       <section class="panel">
-        <h2>Settings</h2>
-        <div class="settings">
-          <label>
-            Competition week
-            <select name="comp_date" id="payment-week-select">
-              {% for option in report_week_options %}
-                <option value="{{ option.date }}" {% if option.date == summary.comp_date %}selected{% endif %}>{{ option.label }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label>
-            Payout type
-            <span class="mode-row">
-              <span class="choice">
-                <input type="radio" name="payout_mode" value="preset" {% if summary.payout_mode != "custom" %}checked{% endif %}>
-                Preset
-              </span>
-              <span class="choice">
-                <input type="radio" name="payout_mode" value="custom" {% if summary.payout_mode == "custom" %}checked{% endif %}>
-                Custom
-              </span>
-            </span>
-          </label>
-          <label>
-            Comp size
-            <select name="comp_size" data-comp-size>
-              {% for size in [32, 48, 64] %}
-                <option value="{{ size }}" {% if summary.comp_size == size %}selected{% endif %}>{{ size }} comp</option>
-              {% endfor %}
-            </select>
-          </label>
-          <div>
-            <div class="metric-label">Presets</div>
-            <div class="preset-row">
-              {% for size, prizes in summary.preset_winnings.items() %}
-                <button
-                  type="button"
-                  class="preset-button {% if summary.comp_size == size and summary.payout_mode != 'custom' %}active{% endif %}"
-                  data-preset-size="{{ size }}"
-                  data-first="{{ "%.2f"|format(prizes[1]) }}"
-                  data-second="{{ "%.2f"|format(prizes[2]) }}"
-                  data-third="{{ "%.2f"|format(prizes[3]) }}"
-                >
-                  {{ size }}: ${{ "%.0f"|format(prizes[1]) }} / ${{ "%.0f"|format(prizes[2]) }} / ${{ "%.0f"|format(prizes[3]) }}
-                </button>
-              {% endfor %}
-            </div>
-          </div>
-          <div class="prize-grid">
-            <label>
-              1st winnings
-              <input type="number" name="first_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[1]) }}">
-            </label>
-            <label>
-              2nd winnings
-              <input type="number" name="second_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[2]) }}">
-            </label>
-            <label>
-              3rd winnings
-              <input type="number" name="third_winnings" min="0" step="0.01" value="{{ "%.2f"|format(summary.prizes[3]) }}">
-            </label>
-          </div>
-        </div>
         <div class="metric-label">
           {% if summary.doubles_comp %}
             Doubles night: all players and buybacks pay $3.
@@ -542,6 +472,17 @@
 
       <section class="panel" style="margin-top: 14px;">
         <h2>Winners</h2>
+        <div class="payout-fields" style="margin-bottom: 14px;">
+          <label>1st place payout
+            <input type="number" name="first_winnings" min="0" step="0.01" value="{{ '%.2f'|format(summary.prizes[1]) }}">
+          </label>
+          <label>2nd place payout
+            <input type="number" name="second_winnings" min="0" step="0.01" value="{{ '%.2f'|format(summary.prizes[2]) }}">
+          </label>
+          <label>3rd place payout
+            <input type="number" name="third_winnings" min="0" step="0.01" value="{{ '%.2f'|format(summary.prizes[3]) }}">
+          </label>
+        </div>
         {% if summary.automatic_winners %}
           <div class="notice">
             Winners are detected automatically from the completed finals.
@@ -550,19 +491,6 @@
             {% endif %}
           </div>
         {% endif %}
-        <div class="settings">
-          {% for row in summary.payout_rows %}
-            <label>
-              {{ row.label }}
-              <select name="winner_{{ row.place }}" data-winner-select {% if summary.automatic_winners %}disabled{% endif %}>
-                <option value="">Not set</option>
-                {% for choice in summary.winner_choices %}
-                  <option value="{{ choice }}" {% if summary.winners[row.place|string] == choice %}selected{% endif %}>{{ choice }}</option>
-                {% endfor %}
-              </select>
-            </label>
-          {% endfor %}
-        </div>
         <table>
           <thead>
             <tr>
@@ -588,7 +516,13 @@
       </section>
 
       <section class="panel" style="margin-top: 14px;">
-        <h2>Active Players</h2>
+        <div class="payment-player-heading">
+          <h2>Active Players</h2>
+          <label class="payment-search">
+            <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">Search players</span>
+            <input id="payment-player-search" type="search" placeholder="Search player names" autocomplete="off">
+          </label>
+        </div>
 
         {% if summary.entries %}
           <table>
@@ -603,7 +537,7 @@
             </thead>
             <tbody>
               {% for entry in summary.entries %}
-                <tr>
+                <tr data-payment-entry>
                   <td class="paid-cell">
                     {% for player in entry.players %}
                       <label class="paid-person">
@@ -647,12 +581,34 @@
               {% endfor %}
             </tbody>
           </table>
+          <div class="payment-search-empty" id="payment-search-empty" hidden>No players match that search.</div>
         {% else %}
           <div class="empty">No active competition players yet.</div>
         {% endif %}
 
         <div class="save-state" data-save-state>Changes save automatically.</div>
       </section>
+
+      {% if debt_tracking_active %}<section class="panel" style="margin-top: 14px;">
+        <h2>Debt payments from previous weeks</h2>
+        {% if payment_debt_entries %}
+          <table>
+            <thead><tr><th class="paid-cell">Paid</th><th>Player</th><th>Week owed</th><th>Amount</th></tr></thead>
+            <tbody>
+              {% for debt in payment_debt_entries %}
+                <tr>
+                  <td class="paid-cell"><label class="paid-person"><input type="checkbox" name="debt_payment" value="{{ debt.key }}" data-fee="{{ '%.2f'|format(debt.amount) }}" {% if debt.checked %}checked{% endif %} aria-label="Mark {{ debt.name }}'s {{ debt.week }} debt as paid"></label></td>
+                  <td>{{ debt.name }}</td>
+                  <td class="debt-weeks">{{ debt.week }}</td>
+                  <td class="historical-debt">${{ '%.2f'|format(debt.amount) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty">No unpaid fees or debt payments are recorded for this week.</div>
+        {% endif %}
+      </section>{% endif %}
     </form>
   </main>
   <script>
@@ -662,22 +618,46 @@
     const income = document.querySelector("[data-income]");
     const winnings = document.querySelector("[data-winnings]");
     const profitLoss = document.querySelector("[data-profit-loss]");
-    const presetButtons = Array.from(document.querySelectorAll("[data-preset-size]"));
-    const compSizeSelect = document.querySelector("[data-comp-size]");
-    const paymentWeekSelect = document.getElementById("payment-week-select");
-    const reportWeekSelect = document.getElementById("report-week-select");
-    const reportDownloadLink = document.getElementById("download-weekly-report");
-    const reportPdfUrl = {{ url_for('payments_pdf') | tojson }};
+    const paymentSearchInput = document.getElementById("payment-player-search");
+    const paymentEntries = Array.from(document.querySelectorAll("[data-payment-entry]"));
+    const paymentSearchEmpty = document.getElementById("payment-search-empty");
+    const paymentSearchStorageKey = "poolCompPaymentPlayerSearch";
     let saveTimer = null;
     let saveInFlight = false;
     let saveAgain = false;
 
-    function money(value) {
-      return `$${Number(value || 0).toFixed(2)}`;
+    paymentEntries.forEach(row => {
+      row.dataset.searchText = Array.from(row.querySelectorAll(".player-stack span"))
+        .map(player => player.textContent || "")
+        .join(" ")
+        .toLocaleLowerCase();
+    });
+
+    function applyPaymentSearch() {
+      const query = paymentSearchInput?.value.trim().toLocaleLowerCase() || "";
+      let visible = 0;
+      paymentEntries.forEach(row => {
+        const matches = !query || row.dataset.searchText.includes(query);
+        row.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      if (paymentSearchEmpty) paymentSearchEmpty.hidden = !query || visible > 0;
     }
 
-    function activePayoutMode() {
-      return paymentsForm.querySelector("input[name='payout_mode']:checked")?.value || "preset";
+    if (paymentSearchInput) {
+      try { paymentSearchInput.value = sessionStorage.getItem(paymentSearchStorageKey) || ""; } catch (error) {}
+      const keepPaymentSearchAtTop = () => paymentSearchInput.scrollIntoView({block: "start", inline: "nearest"});
+      paymentSearchInput.addEventListener("focus", keepPaymentSearchAtTop);
+      paymentSearchInput.addEventListener("input", () => {
+        try { sessionStorage.setItem(paymentSearchStorageKey, paymentSearchInput.value); } catch (error) {}
+        applyPaymentSearch();
+        keepPaymentSearchAtTop();
+      });
+      applyPaymentSearch();
+    }
+
+    function money(value) {
+      return `$${Number(value || 0).toFixed(2)}`;
     }
 
     function currentPrizeValues() {
@@ -688,37 +668,8 @@
       ];
     }
 
-    function setPrizeValues(first, second, third) {
-      paymentsForm.elements.first_winnings.value = Number(first || 0).toFixed(2);
-      paymentsForm.elements.second_winnings.value = Number(second || 0).toFixed(2);
-      paymentsForm.elements.third_winnings.value = Number(third || 0).toFixed(2);
-    }
-
-    function updatePresetButtons() {
-      const selectedSize = compSizeSelect?.value || "";
-      const presetMode = activePayoutMode() === "preset";
-
-      presetButtons.forEach((button) => {
-        button.classList.toggle(
-          "active",
-          presetMode && button.dataset.presetSize === selectedSize
-        );
-      });
-    }
-
-    function applyPreset(size) {
-      const button = presetButtons.find((item) => item.dataset.presetSize === String(size));
-
-      if (!button) return;
-
-      compSizeSelect.value = button.dataset.presetSize;
-      paymentsForm.querySelector("input[name='payout_mode'][value='preset']").checked = true;
-      setPrizeValues(button.dataset.first, button.dataset.second, button.dataset.third);
-      updatePresetButtons();
-    }
-
     function updatePaymentSummary() {
-      const checkedPayments = Array.from(paymentsForm.querySelectorAll("input[name='paid_player']:checked"));
+      const checkedPayments = Array.from(paymentsForm.querySelectorAll("input[name='paid_player']:checked, input[name='debt_payment']:checked"));
       const winningsValue = currentPrizeValues().reduce((total, value) => total + value, 0);
       const incomeValue = checkedPayments.reduce((total, checkbox) => {
         return total + Number(checkbox.dataset.fee || 0);
@@ -731,14 +682,6 @@
       profitLoss.textContent = money(profitValue);
       profitLoss.classList.toggle("negative", profitValue < 0);
       profitLoss.classList.toggle("positive", profitValue >= 0);
-      updatePresetButtons();
-    }
-
-    function updateReportLink() {
-      const reportDate = reportWeekSelect?.value || paymentWeekSelect?.value || "";
-      if (!reportDownloadLink || !reportDate) return;
-
-      reportDownloadLink.href = `${reportPdfUrl}?comp_date=${encodeURIComponent(reportDate)}`;
     }
 
     function updateSummaryFromServer(summary) {
@@ -823,42 +766,15 @@
     }
 
     paymentsForm?.addEventListener("change", scheduleSave);
-    paymentWeekSelect?.addEventListener("change", () => {
-      if (reportWeekSelect) {
-        reportWeekSelect.value = paymentWeekSelect.value;
-      }
-      updateReportLink();
-    });
-    reportWeekSelect?.addEventListener("change", () => {
-      if (paymentWeekSelect) {
-        paymentWeekSelect.value = reportWeekSelect.value;
-      }
-      updateReportLink();
-      scheduleSave();
-    });
     paymentsForm?.addEventListener("input", (event) => {
       if (["first_winnings", "second_winnings", "third_winnings"].includes(event.target.name)) {
-        paymentsForm.querySelector("input[name='payout_mode'][value='custom']").checked = true;
         scheduleSave();
-      }
-    });
-    presetButtons.forEach((button) => {
-      button.addEventListener("click", () => {
-        applyPreset(button.dataset.presetSize);
-        scheduleSave();
-      });
-    });
-    compSizeSelect?.addEventListener("change", () => {
-      if (activePayoutMode() === "preset") {
-        applyPreset(compSizeSelect.value);
       }
     });
     paymentsForm?.addEventListener("submit", (event) => {
       event.preventDefault();
       savePayments();
     });
-    updatePresetButtons();
-    updateReportLink();
   </script>
 </body>
 </html>

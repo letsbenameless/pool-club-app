@@ -91,6 +91,8 @@
   </nav>
   <script>
     const search = document.getElementById("guest-player-search");
+    const keepSearchAtTop = () => search.scrollIntoView({block: "start", inline: "nearest"});
+    search.addEventListener("focus", keepSearchAtTop);
     search.addEventListener("input", () => {
       const query = search.value.trim().toLocaleLowerCase();
       document.querySelectorAll("[data-player-row]").forEach(row => {
@@ -100,6 +102,7 @@
         const rows = Array.from(section.querySelectorAll("[data-player-row]"));
         section.hidden = rows.length > 0 && rows.every(row => row.hidden);
       });
+      keepSearchAtTop();
     });
   </script>
 </body>

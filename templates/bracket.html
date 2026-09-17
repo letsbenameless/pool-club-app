@@ -31,6 +31,8 @@
       transform-origin: top left;
     }
 
+    body.archived-bracket .bracket { pointer-events: none; }
+
     .week-badge {
       position: fixed;
       top: 10px;
@@ -298,7 +300,7 @@
   </style>
 </head>
 
-<body>
+<body class="{% if bracket_archived|default(false) %}archived-bracket{% endif %}">
 
 <div class="week-badge">{{ competition.display }}</div>
 {% if bracket_user_logged_in %}
@@ -1202,7 +1204,7 @@ async function pollBracketState() {
   }
 }
 
-window.setInterval(pollBracketState, 1500);
+{% if not bracket_archived|default(false) %}window.setInterval(pollBracketState, 1500);{% endif %}
 </script>
 
 </body>

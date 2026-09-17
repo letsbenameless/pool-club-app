@@ -14,8 +14,14 @@
       background: #101010;
       color: #f5f5f5;
       font-family: Arial, sans-serif;
-      padding: 18px;
+      padding: 18px 18px 18px 238px;
     }
+    .executive-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 220px; border-right: 1px solid #333; background: #151515; padding: 16px 12px; }
+    .sidebar-title { margin: 0 0 14px; color: #aaa; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .executive-sidebar nav { display: grid; gap: 7px; }
+    .executive-sidebar a, .executive-sidebar button { width: 100%; border: 1px solid #444; border-radius: 6px; background: #222; color: #f5f5f5; padding: 9px 12px; font-size: 14px; font-weight: bold; text-align: left; text-decoration: none; cursor: pointer; }
+    .executive-sidebar a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .sidebar-edge-handle, .sidebar-overlay { display: none; }
     main {
       width: min(480px, 100%);
       border: 1px solid #383838;
@@ -61,9 +67,11 @@
     button:disabled { cursor: not-allowed; opacity: .55; }
     form { margin: 0; }
     .hint { color: #aaa; font-size: 13px; line-height: 1.4; }
+    @media (max-width: 760px) { body { padding: 18px; } }
   </style>
 </head>
 <body>
+  {% include "_executive_sidebar.html" %}
   <main>
     <h1>Competition Registration</h1>
     <p class="week">{{ competition.display }}</p>
@@ -92,9 +100,7 @@
 
     <div class="actions" style="margin-top: 16px;">
       <a class="secondary" href="{{ url_for('bracket') }}">View Bracket</a>
-      <form method="POST" action="{{ url_for('user_logout') }}">
-        <button class="secondary" type="submit">Log Out</button>
-      </form>
+      <a class="secondary" href="{{ url_for('own_account') }}">My Account</a>
     </div>
   </main>
 </body>

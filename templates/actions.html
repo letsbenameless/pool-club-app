@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Executive Actions</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#101010;color:#f5f5f5;font-family:Arial,sans-serif} header,main{margin-left:220px;padding:18px} header{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #333;background:#171717} h1{margin:0;font-size:23px}.header-week{margin:4px 0 0;color:#aaa;font-size:13px}.header-action{border:1px solid #555;border-radius:6px;background:#eee;color:#111;padding:9px 12px;font-size:14px;font-weight:bold;text-decoration:none;white-space:nowrap}
+    .executive-sidebar{position:fixed;inset:0 auto 0 0;z-index:30;width:220px;border-right:1px solid #333;background:#151515;padding:16px 12px}.sidebar-title{margin:0 0 14px;color:#aaa;font-size:12px;font-weight:bold;text-transform:uppercase}.executive-sidebar nav,.sidebar-nav-group{display:grid;gap:7px}.executive-sidebar a,.executive-sidebar button{width:100%;border:1px solid #444;border-radius:6px;background:#222;color:#f5f5f5;padding:9px 12px;font-size:14px;font-weight:bold;text-align:left;text-decoration:none}.executive-sidebar a.active{border-color:#7CFF7C;background:#dfffdc;color:#111}.sidebar-edge-handle,.sidebar-overlay{display:none}
+    .filters{display:grid;grid-template-columns:minmax(180px,2fr) repeat(2,minmax(160px,1fr));gap:8px;margin-bottom:16px} input,select{min-width:0;border:1px solid #555;border-radius:6px;background:#181818;color:#fff;padding:10px;font:inherit}#action-search{background:#050505}input:focus,select:focus{border-color:#7CFF7C;outline:none}.contribution{margin:0 0 18px;border:1px solid #333;border-radius:8px;background:#171717;padding:14px}.contribution h2{margin:0 0 10px;font-size:16px}.contribution-bar{display:flex;width:100%;height:34px;overflow:hidden;border-radius:6px;background:#292929}.contribution-segment{display:flex;align-items:center;justify-content:center;min-width:0;color:#101010;font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden}.contribution-key{display:flex;flex-wrap:wrap;gap:8px 16px;margin-bottom:10px}.contribution-key-item{display:flex;align-items:center;gap:7px;color:#ddd;font-size:13px}.contribution-swatch{width:11px;height:11px;flex:none;border-radius:3px}.contribution-timeline{margin-top:18px;padding-top:14px;border-top:1px solid #333}.contribution-timeline h3{margin:0 0 8px;font-size:14px}.contribution-timeline h3 span{color:#999;font-size:12px;font-weight:normal}.contribution-chart{display:block;width:100%;height:auto;min-height:190px}.chart-grid{stroke:#3a3a3a;stroke-width:1}.chart-axis-label{fill:#999;font-size:11px}.chart-line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.chart-point{stroke:#171717;stroke-width:2}.actions{display:grid;gap:5px}.action{display:flex;align-items:baseline;gap:9px;border:1px solid #333;border-radius:6px;background:#191919;padding:6px 9px;font-size:13px}.action>div:nth-child(2){display:flex;align-items:baseline;gap:8px;min-width:0;flex:1}.action[hidden],.empty[hidden],.contribution[hidden]{display:none!important}.actor{flex:0 1 230px;min-width:0;font-weight:bold}.actor small{display:inline;margin-left:6px;color:#888;font-size:10px;font-weight:normal}.time{flex:none;color:#888;font-size:10px;font-weight:normal;white-space:nowrap}.type{flex:none;color:#7CFF7C;font-size:10px;font-weight:bold;text-transform:uppercase}.description{min-width:0;color:#ddd}.empty{border:1px dashed #444;border-radius:7px;color:#999;padding:14px}
+    @media(max-width:760px){header,main{margin-left:0}.executive-sidebar{transform:translateX(-100%);transition:transform .2s}body.sidebar-open .executive-sidebar{transform:translateX(0)}.sidebar-edge-handle{display:block;position:fixed;left:8px;bottom:8px;z-index:40}.sidebar-overlay{display:none;position:fixed;inset:0;z-index:25;background:rgba(0,0,0,.6)}body.sidebar-open .sidebar-overlay{display:block}.filters{grid-template-columns:1fr}.action{display:grid;grid-template-columns:minmax(0,1fr) max-content;gap:3px 8px}.action>div:nth-child(2){grid-column:1/-1;grid-row:2}.actor{grid-column:1}.time{grid-column:2;grid-row:1}.actor small{display:inline}}
+  </style>
+</head>
+<body>
+  {% include "_executive_sidebar.html" %}
+  <header><div><h1>Executive Actions</h1><p class="header-week">{{ competition.display }}</p></div><a class="header-action" href="{{ url_for('bracket') }}">Bracket Display</a></header>
+  <main>
+    <section class="contribution" id="executive-contribution" aria-labelledby="contribution-heading">
+      <h2 id="contribution-heading">Executive contributions</h2>
+      <div class="contribution-key" id="contribution-key"></div>
+      <div class="contribution-bar" id="contribution-bar" aria-label="Percentage of visible actions by executive"></div>
+      <div class="contribution-timeline">
+        <h3>Contributions over time <span id="contribution-timescale"></span></h3>
+        <svg class="contribution-chart" id="contribution-chart" viewBox="0 0 900 260" role="img" aria-label="Executive actions over time"></svg>
+      </div>
+    </section>
+    <div class="filters">
+      <input id="action-search" type="search" value="{{ search }}" placeholder="Search actions, players, or executives" aria-label="Search actions" autocomplete="off">
+      <select id="action-type-filter" aria-label="Action type"><option value="">All action types</option>{% for value,label in action_types.items() %}<option value="{{ value }}" {% if selected_action_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      <select id="executive-filter" aria-label="Executive"><option value="">All executives</option>{% for item in executives %}<option value="{{ item.executive_email }}" {% if selected_executive == item.executive_email %}selected{% endif %}>{{ item.executive_name or item.executive_email }}</option>{% endfor %}</select>
+    </div>
+    <section class="actions" id="action-list">{% for item in actions %}<article class="action" data-action-row data-action-type="{{ item.action_type }}" data-executive="{{ item.executive_email }}" data-executive-name="{{ item.executive_name or item.executive_email }}" data-created-at="{{ item.created_at }}"><div class="actor">{{ item.executive_name or item.executive_email }}<small>{{ item.executive_email }}</small></div><div><div class="type">{{ action_types.get(item.action_type, item.action_type | replace('_',' ')) }}</div><div class="description">{{ item.description }}</div></div><time class="time" data-action-time>{{ item.created_at }}</time></article>{% endfor %}</section>
+    <div class="empty" id="action-filter-empty" {% if actions %}hidden{% endif %}>No executive actions match these filters.</div>
+  </main>
+  <script>
+    const actionSearch = document.getElementById("action-search");
+    const actionTypeFilter = document.getElementById("action-type-filter");
+    const executiveFilter = document.getElementById("executive-filter");
+    const actionRows = Array.from(document.querySelectorAll("[data-action-row]"));
+    const actionFilterEmpty = document.getElementById("action-filter-empty");
+    const contribution = document.getElementById("executive-contribution");
+    const contributionBar = document.getElementById("contribution-bar");
+    const contributionKey = document.getElementById("contribution-key");
+    const contributionChart = document.getElementById("contribution-chart");
+    const contributionTimescale = document.getElementById("contribution-timescale");
+    const actionFilterStorageKey = "poolCompExecutiveActionFilters";
+    const configuredTimeZone = {{ timezone | tojson }};
+    const configuredCompetitionEndTime = {{ competition_end_time | tojson }};
+    const parseActionTimestamp = value => Date.parse(`${value.replace(" ", "T")}Z`);
+    const timeZoneName = new Intl.DateTimeFormat("en-AU", {timeZone: configuredTimeZone, timeZoneName: "short"})
+      .formatToParts(new Date()).find(part => part.type === "timeZoneName")?.value || configuredTimeZone;
+    const actionTimeFormatter = new Intl.DateTimeFormat("en-AU", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+      timeZone: configuredTimeZone, timeZoneName: "short"
+    });
+    const contributionColours = ["#7CFF7C", "#63B3FF", "#FFD166", "#FF7C9B", "#B794F4", "#4FD1C5", "#FFA94D", "#A3E635"];
+    const executiveColours = new Map(
+      [...new Set(actionRows.map(row => row.dataset.executive))].sort().map((email, index) => [email, contributionColours[index % contributionColours.length]])
+    );
+    actionRows.forEach(row => {
+      row.querySelector("[data-action-time]").textContent = actionTimeFormatter.format(new Date(parseActionTimestamp(row.dataset.createdAt)));
+      row.dataset.searchText = row.textContent.toLocaleLowerCase();
+    });
+
+    function addSvgElement(parent, tag, attributes, text = "") {
+      const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.entries(attributes).forEach(([name, value]) => element.setAttribute(name, value));
+      if (text) element.textContent = text;
+      parent.appendChild(element);
+      return element;
+    }
+
+    function updateContributionTimeline(visibleRows, entries) {
+      contributionChart.replaceChildren();
+      if (!visibleRows.length) return;
+
+      const timestamps = visibleRows.map(row => parseActionTimestamp(row.dataset.createdAt));
+      const interval = 60 * 1000;
+      const allStartTimes = actionRows.filter(row => row.dataset.actionType === "competition_started").map(row => parseActionTimestamp(row.dataset.createdAt));
+      const competitionStart = allStartTimes.length ? Math.max(...allStartTimes) : Math.min(...timestamps);
+      const actualEndTimes = actionRows
+        .filter(row => row.dataset.actionType === "competition_ended")
+        .map(row => parseActionTimestamp(row.dataset.createdAt))
+        .filter(timestamp => timestamp >= competitionStart);
+
+      const zonedParts = timestamp => {
+        const parts = new Intl.DateTimeFormat("en-CA", {
+          timeZone: configuredTimeZone, year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+        }).formatToParts(new Date(timestamp));
+        return Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, Number(part.value)]));
+      };
+      const zonedLocalToUtc = (year, month, day, hour, minute) => {
+        const target = Date.UTC(year, month - 1, day, hour, minute);
+        let candidate = target;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const shown = zonedParts(candidate);
+          const shownAsUtc = Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute);
+          candidate += target - shownAsUtc;
+        }
+        return candidate;
+      };
+      const plannedEnd = () => {
+        const startParts = zonedParts(competitionStart);
+        const [hour, minute] = configuredCompetitionEndTime.split(":").map(Number);
+        const targetDay = new Date(Date.UTC(startParts.year, startParts.month - 1, startParts.day));
+        if (hour * 60 + minute <= startParts.hour * 60 + startParts.minute) targetDay.setUTCDate(targetDay.getUTCDate() + 1);
+        return zonedLocalToUtc(targetDay.getUTCFullYear(), targetDay.getUTCMonth() + 1, targetDay.getUTCDate(), hour, minute);
+      };
+      const competitionEnd = actualEndTimes.length ? Math.min(...actualEndTimes) : Math.max(competitionStart, plannedEnd());
+      const firstBucket = Math.floor(competitionStart / interval) * interval;
+      const lastBucket = Math.ceil(competitionEnd / interval) * interval;
+      const buckets = [];
+      for (let bucket = firstBucket; bucket <= lastBucket; bucket += interval) buckets.push(bucket);
+      if (buckets.length === 1) buckets.push(firstBucket + interval);
+      contributionTimescale.textContent = `(actions per minute, ${timeZoneName})`;
+      const bucketLabel = bucket => new Intl.DateTimeFormat(undefined, {
+        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: configuredTimeZone
+      }).format(new Date(bucket));
+
+      const dailyCounts = new Map();
+      visibleRows.forEach((row, index) => {
+        if (timestamps[index] < competitionStart || timestamps[index] > competitionEnd) return;
+        const bucket = Math.floor(timestamps[index] / interval) * interval;
+        const key = `${row.dataset.executive}|${bucket}`;
+        dailyCounts.set(key, (dailyCounts.get(key) || 0) + 1);
+      });
+      const maxCount = Math.max(1, ...dailyCounts.values());
+      const left = 44, right = 16, top = 14, bottom = 34, width = 900, height = 260;
+      const plotWidth = width - left - right;
+      const plotHeight = height - top - bottom;
+      const xAt = index => left + index / (buckets.length - 1) * plotWidth;
+      const yAt = count => top + plotHeight - count / maxCount * plotHeight;
+
+      [0, 0.5, 1].forEach(ratio => {
+        const y = top + plotHeight * ratio;
+        addSvgElement(contributionChart, "line", {x1: left, y1: y, x2: width - right, y2: y, class: "chart-grid"});
+      });
+      addSvgElement(contributionChart, "text", {x: left - 8, y: top + 4, "text-anchor": "end", class: "chart-axis-label"}, String(maxCount));
+      addSvgElement(contributionChart, "text", {x: left - 8, y: top + plotHeight + 4, "text-anchor": "end", class: "chart-axis-label"}, "0");
+      addSvgElement(contributionChart, "text", {x: left, y: height - 8, "text-anchor": "start", class: "chart-axis-label"}, bucketLabel(buckets[0]));
+      addSvgElement(contributionChart, "text", {x: width - right, y: height - 8, "text-anchor": "end", class: "chart-axis-label"}, bucketLabel(buckets[buckets.length - 1]));
+
+      entries.forEach(([email, item]) => {
+        const colour = executiveColours.get(email);
+        const values = buckets.map(bucket => dailyCounts.get(`${email}|${bucket}`) || 0);
+        const points = values.map((count, index) => `${xAt(index)},${yAt(count)}`).join(" ");
+        addSvgElement(contributionChart, "polyline", {points, stroke: colour, class: "chart-line"});
+        values.forEach((count, index) => {
+          const point = addSvgElement(contributionChart, "circle", {cx: xAt(index), cy: yAt(count), r: count ? 4 : 1.6, fill: colour, opacity: count ? 1 : 0.45, class: "chart-point"});
+          addSvgElement(point, "title", {}, `${item.name}: ${count} action${count === 1 ? "" : "s"} during ${bucketLabel(buckets[index])} ${timeZoneName}`);
+        });
+      });
+    }
+
+    function actionsInLatestCompetition(rows) {
+      const startTimes = actionRows
+        .filter(row => row.dataset.actionType === "competition_started")
+        .map(row => parseActionTimestamp(row.dataset.createdAt));
+      if (!startTimes.length) return rows;
+      const start = Math.max(...startTimes);
+      const endTimes = actionRows
+        .filter(row => row.dataset.actionType === "competition_ended")
+        .map(row => parseActionTimestamp(row.dataset.createdAt))
+        .filter(timestamp => timestamp >= start);
+      const end = endTimes.length ? Math.min(...endTimes) : Number.POSITIVE_INFINITY;
+      return rows.filter(row => {
+        const timestamp = parseActionTimestamp(row.dataset.createdAt);
+        return timestamp >= start && timestamp <= end;
+      });
+    }
+
+    function updateContributionGraph() {
+      const visibleRows = actionRows.filter(row => !row.hidden);
+      const contributionRows = actionsInLatestCompetition(visibleRows);
+      const counts = new Map();
+      contributionRows.forEach(row => {
+        const email = row.dataset.executive;
+        const current = counts.get(email) || {name: row.dataset.executiveName, count: 0};
+        current.count += 1;
+        counts.set(email, current);
+      });
+      const entries = [...counts.entries()].sort((a, b) => b[1].count - a[1].count || a[1].name.localeCompare(b[1].name));
+      contribution.hidden = entries.length === 0;
+      contributionBar.replaceChildren();
+      contributionKey.replaceChildren();
+      entries.forEach(([email, item]) => {
+        const percentage = item.count / contributionRows.length * 100;
+        const roundedPercentage = Math.round(percentage);
+        const colour = executiveColours.get(email);
+        const segment = document.createElement("div");
+        segment.className = "contribution-segment";
+        segment.style.width = `${percentage}%`;
+        segment.style.backgroundColor = colour;
+        segment.title = `${item.name}: ${roundedPercentage}% (${item.count} actions)`;
+        segment.setAttribute("aria-label", segment.title);
+        if (percentage >= 7) segment.textContent = `${roundedPercentage}%`;
+        contributionBar.appendChild(segment);
+
+        const keyItem = document.createElement("div");
+        keyItem.className = "contribution-key-item";
+        const swatch = document.createElement("span");
+        swatch.className = "contribution-swatch";
+        swatch.style.backgroundColor = colour;
+        const label = document.createElement("span");
+        label.textContent = `${item.name} — ${roundedPercentage}%`;
+        keyItem.append(swatch, label);
+        contributionKey.appendChild(keyItem);
+      });
+      updateContributionTimeline(contributionRows, entries);
+    }
+
+    function applyActionFilters() {
+      const query = actionSearch.value.trim().toLocaleLowerCase();
+      const actionType = actionTypeFilter.value;
+      const executive = executiveFilter.value;
+      let visible = 0;
+      actionRows.forEach(row => {
+        const matches = (!query || row.dataset.searchText.includes(query))
+          && (!actionType || row.dataset.actionType === actionType)
+          && (!executive || row.dataset.executive === executive);
+        row.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      actionFilterEmpty.hidden = visible > 0;
+      updateContributionGraph();
+      try { sessionStorage.setItem(actionFilterStorageKey, JSON.stringify({query: actionSearch.value, actionType, executive})); } catch (error) {}
+      const url = new URL(window.location.href);
+      [["search", actionSearch.value], ["action_type", actionType], ["executive", executive]].forEach(([key,value]) => value ? url.searchParams.set(key,value) : url.searchParams.delete(key));
+      history.replaceState(null, "", url);
+    }
+
+    if (!window.location.search) {
+      try {
+        const stored = JSON.parse(sessionStorage.getItem(actionFilterStorageKey) || "{}");
+        actionSearch.value = stored.query || "";
+        actionTypeFilter.value = stored.actionType || "";
+        executiveFilter.value = stored.executive || "";
+      } catch (error) {}
+    }
+    function keepActionSearchAtTop() {
+      actionSearch.scrollIntoView({block: "start", inline: "nearest"});
+    }
+    actionSearch.addEventListener("focus", keepActionSearchAtTop);
+    actionSearch.addEventListener("input", () => {
+      applyActionFilters();
+      keepActionSearchAtTop();
+    });
+    actionTypeFilter.addEventListener("change", applyActionFilters);
+    executiveFilter.addEventListener("change", applyActionFilters);
+    applyActionFilters();
+  </script>
+</body></html>

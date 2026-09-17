@@ -16,10 +16,10 @@
       top: 0;
       z-index: 10;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
       gap: 12px;
-      padding: 14px 18px;
+      padding: 18px;
       background: #171717;
       border-bottom: 1px solid #333;
       margin-left: 220px;
@@ -27,7 +27,7 @@
 
     h1 {
       margin: 0;
-      font-size: 22px;
+      font-size: 23px;
     }
 
     h2 {
@@ -52,6 +52,12 @@
     button.secondary {
       background: #222;
       color: #f5f5f5;
+    }
+
+    button.remove-player {
+      background: #2a1717;
+      border-color: #6c3434;
+      color: #ffd8d8;
     }
 
     main {
@@ -132,11 +138,26 @@
       margin-top: 14px;
     }
 
+    .settings-section {
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #121212;
+      padding: 12px;
+    }
+
+    .settings-section + .settings-section { margin-top: 10px; }
+    .settings-section > summary { cursor: pointer; color: #aaa; font-size: 13px; font-weight: bold; }
+    .settings-section[open] > summary { margin-bottom: 14px; }
+
     .settings {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 10px;
     }
+
+    .payout-preset-list { display: grid; gap: 8px; margin-bottom: 10px; }
+    .payout-preset-row { display: grid; grid-template-columns: 1fr repeat(3, 1fr) auto; gap: 8px; align-items: end; }
+    .payout-preset-row button { margin-bottom: 0; }
 
     label {
       display: grid;
@@ -365,6 +386,8 @@
     }
 
     @media (max-width: 700px) {
+      .payout-preset-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .payout-preset-row button { grid-column: 1 / -1; }
       header {
         position: static;
         align-items: flex-start;
@@ -481,10 +504,7 @@
 <body>
   {% include "_executive_sidebar.html" %}
   <header>
-    <h1>Settings</h1>
-    <div class="nav-actions">
-      <a href="{{ url_for('bracket') }}">Bracket Display</a>
-    </div>
+    <div><h1>Settings</h1><p class="page-date">{{ competition.display }}</p></div>
   </header>
 
   <main>
@@ -499,7 +519,45 @@
     >
       {% if error %}<div class="settings-error">{{ error }}</div>{% endif %}
 
-      <h2>Competition branding</h2>
+      <details class="settings-section">
+      <summary>Regional settings</summary>
+      <div class="settings">
+        <label>
+          Timezone
+          <span class="hint">Used for action timestamps and contribution reporting. AEST (Brisbane) is the default.</span>
+          <select name="timezone">
+            {% for value, label in timezone_options %}
+              <option value="{{ value }}" {% if settings.timezone == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Planned competition end time
+          <span class="hint">The contribution timeline runs to this time until End Comp is pressed.</span>
+          <input name="competition_end_time" type="time" value="{{ settings.competition_end_time }}" required>
+        </label>
+      </div>
+      </details>
+
+      <details class="settings-section">
+      <summary>Payment presets</summary>
+      <div class="hint" style="margin-bottom: 12px;">Add any number of payout shortcuts. They appear on Payments as “player count: $1st / $2nd / $3rd”.</div>
+      <div class="payout-preset-list" data-payout-preset-list>
+        {% for preset in settings.payout_presets %}
+          <div class="payout-preset-row" data-payout-preset-row>
+            <label>Player count<input type="number" name="preset_player_count" min="1" step="1" value="{{ preset.player_count }}" required></label>
+            <label>1st<input type="number" name="preset_first" min="0" step="0.01" value="{{ '%.2f'|format(preset.first) }}" required></label>
+            <label>2nd<input type="number" name="preset_second" min="0" step="0.01" value="{{ '%.2f'|format(preset.second) }}" required></label>
+            <label>3rd<input type="number" name="preset_third" min="0" step="0.01" value="{{ '%.2f'|format(preset.third) }}" required></label>
+            <button class="remove-player" type="button" data-remove-payout-preset>Remove</button>
+          </div>
+        {% endfor %}
+      </div>
+      <button type="button" data-add-payout-preset>Add payout preset</button>
+      </details>
+
+      <details class="settings-section">
+      <summary>Competition branding</summary>
       <div class="logo-setting">
         <img
           class="logo-preview"
@@ -531,8 +589,10 @@
           </div>
         {% endfor %}
       </div>
+      </details>
 
-      <h2>Colours</h2>
+      <details class="settings-section">
+      <summary>Colours</summary>
       <div class="hint" style="margin-bottom: 12px;">
         Use hex values such as #FF7900 or RGB values such as rgb(255, 121, 0).
       </div>
@@ -587,8 +647,10 @@
           </span>
         </label>
       </div>
+      </details>
 
-      <h2 style="margin-top: 22px;">QR code</h2>
+      <details class="settings-section">
+      <summary>QR code</summary>
       <div class="hint" style="margin-bottom: 12px;">
         The QR code appears below the central round-robin box. Leave the link blank to hide it.
       </div>
@@ -632,6 +694,7 @@
           </span>
         </label>
       </div>
+      </details>
 
       <div class="actions">
         <button type="submit">Save Settings</button>
@@ -650,6 +713,8 @@
     const logoPreview = document.querySelector("[data-logo-preview]");
     const logoField = document.querySelector("[data-logo-field]");
     const logoHistory = document.querySelector("[data-logo-history]");
+    const payoutPresetList = document.querySelector("[data-payout-preset-list]");
+    const addPayoutPreset = document.querySelector("[data-add-payout-preset]");
     let activeColorInput = colorInputs[0] || null;
     let saveTimer = null;
     let saveInFlight = false;
@@ -712,6 +777,10 @@
         }
 
         const settings = await response.json();
+        if (actionToSave === "reset") {
+          window.location.reload();
+          return;
+        }
         if (logoPreview && settings.logo_filename) {
           logoPreview.src = `/assets/${encodeURIComponent(settings.logo_filename)}?v=${settings._version || Date.now()}`;
         }
@@ -787,6 +856,31 @@
     settingFields.forEach(input => {
       input.addEventListener("input", scheduleSave);
       input.addEventListener("change", scheduleSave);
+    });
+
+    payoutPresetList?.addEventListener("click", event => {
+      const removeButton = event.target.closest("[data-remove-payout-preset]");
+      if (!removeButton) return;
+      removeButton.closest("[data-payout-preset-row]")?.remove();
+      scheduleSave();
+    });
+
+    payoutPresetList?.addEventListener("input", scheduleSave);
+    payoutPresetList?.addEventListener("change", scheduleSave);
+
+    addPayoutPreset?.addEventListener("click", () => {
+      const row = document.createElement("div");
+      row.className = "payout-preset-row";
+      row.dataset.payoutPresetRow = "";
+      row.innerHTML = `
+        <label>Player count<input type="number" name="preset_player_count" min="1" step="1" value="32" required></label>
+        <label>1st<input type="number" name="preset_first" min="0" step="0.01" value="0.00" required></label>
+        <label>2nd<input type="number" name="preset_second" min="0" step="0.01" value="0.00" required></label>
+        <label>3rd<input type="number" name="preset_third" min="0" step="0.01" value="0.00" required></label>
+        <button class="remove-player" type="button" data-remove-payout-preset>Remove</button>`;
+      payoutPresetList.append(row);
+      row.querySelector("input")?.focus();
+      scheduleSave();
     });
 
     function selectLogoFromHistory(item) {

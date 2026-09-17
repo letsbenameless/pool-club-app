@@ -1,312 +1,211 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Executive Requests</title>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account Management</title>
   <style>
-    body {
-      margin: 0;
-      background: #101010;
-      color: #f5f5f5;
-      font-family: Arial, sans-serif;
-    }
-
-    header {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 14px 18px;
-      background: #171717;
-      border-bottom: 1px solid #333;
-      margin-left: 220px;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: 22px;
-    }
-
-    h2 {
-      margin: 0 0 10px;
-      font-size: 17px;
-    }
-
-    a,
-    button {
-      border: 1px solid #555;
-      border-radius: 6px;
-      background: #eeeeee;
-      color: #111;
-      padding: 9px 12px;
-      font-size: 14px;
-      font-weight: bold;
-      text-decoration: none;
-      cursor: pointer;
-    }
-
-    button.secondary,
-    a.secondary {
-      background: #222;
-      color: #f5f5f5;
-    }
-
-    button.danger {
-      background: #ffdddd;
-      border-color: #ff9f9f;
-    }
-
-    main {
-      padding: 18px;
-      margin-left: 220px;
-    }
-
-    .executive-sidebar {
-      position: fixed;
-      inset: 0 auto 0 0;
-      z-index: 30;
-      box-sizing: border-box;
-      width: 220px;
-      border-right: 1px solid #333;
-      background: #151515;
-      padding: 16px 12px;
-    }
-
-    .sidebar-title {
-      margin: 0 0 14px;
-      color: #aaa;
-      font-size: 12px;
-      font-weight: bold;
-      text-transform: uppercase;
-    }
-
-    .executive-sidebar nav {
-      display: grid;
-      gap: 7px;
-    }
-
-    .executive-sidebar a,
-    .executive-sidebar button {
-      box-sizing: border-box;
-      width: 100%;
-      border-color: #444;
-      background: #222;
-      color: #f5f5f5;
-      text-align: left;
-    }
-
-    .executive-sidebar a.active {
-      border-color: #7CFF7C;
-      background: #dfffdc;
-      color: #111;
-    }
-
-    .executive-sidebar form {
-      margin: 16px 0 0;
-    }
-
-    .sidebar-edge-handle,
-    .sidebar-overlay {
-      display: none;
-    }
-
-    .nav-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-
-    .panel {
-      border: 1px solid #333;
-      border-radius: 6px;
-      background: #181818;
-      padding: 12px;
-    }
-
-    .request-list {
-      display: grid;
-      gap: 10px;
-    }
-
-    .request-card {
-      border: 1px solid #333;
-      border-radius: 6px;
-      background: #101010;
-      padding: 12px;
-    }
-
-    .request-fields {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-
-    .field-label {
-      color: #aaa;
-      font-size: 12px;
-      font-weight: bold;
-      text-transform: uppercase;
-    }
-
-    .field-value {
-      margin-top: 3px;
-      font-size: 14px;
-      font-weight: bold;
-    }
-
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .message {
-      margin: 0 0 12px;
-      border: 1px solid #555;
-      border-radius: 6px;
-      background: #101010;
-      color: #ddd;
-      padding: 10px 12px;
-      font-size: 13px;
-      font-weight: bold;
-    }
-
-    .error {
-      border-color: #ff9f9f;
-      color: #ffd8d8;
-    }
-
-    .empty {
-      color: #aaa;
-      padding: 8px 0 0;
-    }
-
-    @media (max-width: 700px) {
-      header {
-        position: static;
-        align-items: flex-start;
-        flex-direction: column;
-        margin-left: 0;
-      }
-
-      .executive-sidebar {
-        position: fixed;
-        inset: 0 auto 0 0;
-        width: min(82vw, 280px);
-        border-right: 1px solid #333;
-        border-bottom: 0;
-        transform: translateX(-100%);
-        transition: transform 180ms ease;
-        box-shadow: 10px 0 26px rgba(0, 0, 0, 0.35);
-      }
-
-      body.sidebar-open .executive-sidebar {
-        transform: translateX(0);
-      }
-
-      .sidebar-edge-handle {
-        position: fixed;
-        left: 0;
-        top: 78px;
-        z-index: 25;
-        display: block;
-        width: 30px;
-        min-height: 86px;
-        border-radius: 0 6px 6px 0;
-        border-left: 0;
-        padding: 7px 4px;
-        writing-mode: vertical-rl;
-        text-orientation: mixed;
-        background: #7CFF7C;
-        color: #111;
-        font-size: 12px;
-      }
-
-      .sidebar-overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 20;
-        display: none;
-        background: rgba(0, 0, 0, 0.42);
-      }
-
-      body.sidebar-open .sidebar-overlay {
-        display: block;
-      }
-
-      .nav-actions,
-      .nav-actions a {
-        width: 100%;
-        text-align: center;
-      }
-
-      main {
-        margin-left: 0;
-        padding: 12px;
-      }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101010; color: #f5f5f5; font-family: Arial, sans-serif; }
+    header { margin-left: 220px; padding: 18px; border-bottom: 1px solid #333; background: #171717; }
+    h1 { margin: 0 0 4px; font-size: 23px; }
+    header p { margin: 0; color: #aaa; font-size: 13px; }
+    main { margin-left: 220px; padding: 18px; }
+    .executive-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 220px; border-right: 1px solid #333; background: #151515; padding: 16px 12px; }
+    .sidebar-title { margin: 0 0 14px; color: #aaa; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .executive-sidebar nav { display: grid; gap: 7px; }
+    .executive-sidebar a, .executive-sidebar button { box-sizing: border-box; width: 100%; border: 1px solid #444; border-radius: 6px; background: #222; color: #f5f5f5; padding: 9px 12px; font-size: 14px; font-weight: bold; text-align: left; text-decoration: none; cursor: pointer; }
+    .executive-sidebar a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .executive-sidebar form { margin: 16px 0 0; }
+    .sidebar-edge-handle, .sidebar-overlay { display: none; }
+    .message, .error, .empty { border-radius: 7px; padding: 11px 12px; }
+    .message { border: 1px solid #397339; background: #173417; color: #baffba; }
+    .error { border: 1px solid #814343; background: #3b1919; color: #ffd0d0; }
+    .empty { border: 1px dashed #444; color: #999; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+    .filters a { border: 1px solid #444; border-radius: 999px; background: #1c1c1c; color: #ddd; padding: 8px 12px; text-decoration: none; font-size: 13px; font-weight: bold; }
+    .filters a.active { border-color: #7CFF7C; background: #dfffdc; color: #111; }
+    .account-search { display: block; width: min(100%, 420px); margin: 0 0 14px; }
+    .account-search input { width: 100%; }
+    .accounts { display: grid; gap: 7px; }
+    .account-card { border: 1px solid #393939; border-radius: 7px; background: #191919; padding: 9px 10px; }
+    .account-head { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .account-name { margin: 0; font-size: 15px; }
+    .account-email { margin: 4px 0 0; color: #aaa; font-size: 13px; overflow-wrap: anywhere; }
+    .badge { border: 1px solid #555; border-radius: 999px; padding: 3px 7px; color: #ccc; font-size: 10px; font-weight: bold; text-transform: uppercase; white-space: nowrap; }
+    .badge.requested_executive { border-color: #d5a446; color: #ffd98c; }
+    .badge.executive { border-color: #7CFF7C; color: #baffba; }
+    .meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin: 6px 0; color: #aaa; font-size: 11px; }
+    .contact-meta { display: flex; flex-wrap: wrap; align-items: center; width: 100%; gap: 5px 12px; border-top: 1px solid #303030; padding-top: 6px; }
+    .copy-instagram { width: fit-content; max-width: 100%; border: 1px solid #555; background: #222; color: #baffba; padding: 4px 7px; overflow-wrap: anywhere; text-align: left; }
+    .contact-link { display: inline-block; max-width: 100%; border: 1px solid #555; border-radius: 5px; background: #222; color: #baffba; padding: 4px 7px; font-weight: bold; text-decoration: none; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; }
+    form { margin: 0; }
+    .role-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; }
+    label { display: grid; gap: 5px; color: #aaa; font-size: 12px; font-weight: bold; }
+    input, select, textarea { width: 100%; border: 1px solid #555; border-radius: 6px; background: #080808; color: #fff; padding: 9px 10px; font: inherit; }
+    #account-search { background: #050505; }
+    button { border: 1px solid #555; border-radius: 6px; background: #eee; color: #111; padding: 7px 10px; font: inherit; font-weight: bold; cursor: pointer; }
+    button.danger { border-color: #8a4646; background: #321b1b; color: #ffd2d2; }
+    dialog { width: min(520px, calc(100vw - 24px)); border: 1px solid #555; border-radius: 9px; background: #181818; color: #fff; padding: 0; }
+    dialog::backdrop { background: rgba(0,0,0,.72); }
+    .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid #333; padding: 12px 14px; }
+    .dialog-head h2 { margin: 0; font-size: 18px; }
+    .dialog-head button { background: #222; color: #fff; padding: 5px 9px; }
+    .message-form { display: grid; gap: 10px; padding: 14px; }
+    .channel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    textarea { min-height: 130px; resize: vertical; }
+    @media (max-width: 760px) {
+      header, main { margin-left: 0; }
+      .executive-sidebar { transform: translateX(-100%); transition: transform .2s; }
+      body.sidebar-open .executive-sidebar { transform: translateX(0); }
+      .sidebar-edge-handle { display: block; position: fixed; left: 8px; bottom: 8px; z-index: 40; }
+      .sidebar-overlay { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.6); }
+      body.sidebar-open .sidebar-overlay { display: block; }
+      .account-head { align-items: center; }
+      .role-form { align-items: end; }
+      .account-search { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   {% include "_executive_sidebar.html" %}
   <header>
-    <h1>Requests</h1>
-    <div class="nav-actions">
-      <a href="{{ url_for('bracket') }}">Bracket Display</a>
-    </div>
+    <h1>Account Management</h1>
+    <p class="page-date">{{ competition.display }}</p>
   </header>
-
   <main>
     {% if message %}<p class="message">{{ message }}</p>{% endif %}
-    {% if error %}<p class="message error">{{ error }}</p>{% endif %}
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-    <section class="panel">
-      <h2>Pending Executive Requests</h2>
+    <label class="account-search">
+      <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);">Search accounts</span>
+      <input id="account-search" type="search" value="{{ search }}" placeholder="Search accounts" autocomplete="off">
+    </label>
+    <nav class="filters" aria-label="Account filters">
+      <a class="{% if account_filter == 'all' %}active{% endif %}" href="{{ url_for('executive_requests_route', account_filter='all') }}">All ({{ counts.requested_executive + counts.executive + counts.player }})</a>
+      <a class="{% if account_filter == 'requested_executive' %}active{% endif %}" href="{{ url_for('executive_requests_route', account_filter='requested_executive') }}">Requested executive ({{ counts.requested_executive }})</a>
+      <a class="{% if account_filter == 'executive' %}active{% endif %}" href="{{ url_for('executive_requests_route', account_filter='executive') }}">Executive ({{ counts.executive }})</a>
+      <a class="{% if account_filter == 'player' %}active{% endif %}" href="{{ url_for('executive_requests_route', account_filter='player') }}">Non-executive ({{ counts.player }})</a>
+    </nav>
 
-      {% if requests %}
-        <div class="request-list">
-          {% for request_row in requests %}
-            <article class="request-card">
-              <div class="request-fields">
-                <div>
-                  <div class="field-label">Email</div>
-                  <div class="field-value">{{ request_row.email }}</div>
-                </div>
-                <div>
-                  <div class="field-label">Name</div>
-                  <div class="field-value">{{ request_row.player_name }}</div>
-                </div>
-                <div>
-                  <div class="field-label">Requested role</div>
-                  <div class="field-value">{{ request_row.executive_role }}</div>
-                </div>
-                <div>
-                  <div class="field-label">Requested</div>
-                  <div class="field-value">{{ request_row.requested_at }}</div>
-                </div>
+    {% if accounts %}
+      <section class="accounts">
+        {% for account in accounts %}
+          <article class="account-card" data-account-card>
+            <div class="account-head">
+              <div>
+                <h2 class="account-name">{{ account.player_name or 'Unnamed account' }}</h2>
               </div>
-              <div class="actions">
+              <span class="badge {{ account.account_type }}">{% if account.account_type == 'player' %}Non-executive{% else %}{{ account.account_type | replace('_', ' ') }}{% endif %}</span>
+            </div>
+            <div class="meta">
+              {% if account.executive_role %}<span>Role: {{ account.executive_role }}</span>{% endif %}
+              {% if account.claim_status is defined %}<span>Status: {{ account.claim_status | title }}</span>{% endif %}
+              <span>Created: {{ account.created_at }}</span>
+              <div class="contact-meta">
+                <span>Instagram: {% if account.instagram %}<button class="copy-instagram" type="button" data-copy-instagram="{{ account.instagram }}">{{ account.instagram }}</button>{% else %}Not provided{% endif %}</span>
+                <span>Phone: {% if account.phone %}<a class="contact-link" href="tel:{{ account.display_phone }}">{{ account.display_phone }}</a>{% else %}Not provided{% endif %}</span>
+                <span>Email: <a class="contact-link" href="mailto:{{ account.email }}">{{ account.email }}</a></span>
+              </div>
+            </div>
+            <div class="actions">
+              {% if account.account_type == 'requested_executive' %}
                 <form method="POST">
-                  <input type="hidden" name="request_id" value="{{ request_row.id }}">
+                  <input type="hidden" name="account_type" value="requested_executive"><input type="hidden" name="account_id" value="{{ account.id }}"><input type="hidden" name="account_filter" value="{{ account_filter }}">
                   <button type="submit" name="action" value="approve">Approve</button>
                 </form>
                 <form method="POST">
-                  <input type="hidden" name="request_id" value="{{ request_row.id }}">
+                  <input type="hidden" name="account_type" value="requested_executive"><input type="hidden" name="account_id" value="{{ account.id }}"><input type="hidden" name="account_filter" value="{{ account_filter }}">
                   <button class="danger" type="submit" name="action" value="deny">Deny</button>
                 </form>
-              </div>
-            </article>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="empty">No pending requests.</div>
-      {% endif %}
-    </section>
+              {% elif account.account_type == 'executive' and account.id != current_executive_id %}
+                <form class="role-form" method="POST">
+                  <input type="hidden" name="account_type" value="executive"><input type="hidden" name="account_id" value="{{ account.id }}"><input type="hidden" name="account_filter" value="{{ account_filter }}">
+                  <label>Executive role
+                    <select name="executive_role">{% for role in executive_roles %}<option value="{{ role }}" {% if role == account.executive_role %}selected{% endif %}>{{ role }}</option>{% endfor %}</select>
+                  </label>
+                  <button type="submit" name="action" value="update_role">Save role</button>
+                </form>
+                <form method="POST" onsubmit="return confirm('Delete this executive account?');">
+                  <input type="hidden" name="account_type" value="executive"><input type="hidden" name="account_id" value="{{ account.id }}"><input type="hidden" name="account_filter" value="{{ account_filter }}">
+                  <button class="danger" type="submit" name="action" value="delete">Delete executive</button>
+                </form>
+              {% elif account.account_type == 'executive' %}
+                <span class="account-email">This is your account</span>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </section>
+      <div class="empty" id="account-search-empty" hidden>No accounts match that search.</div>
+    {% else %}
+      <div class="empty">No accounts match this filter.</div>
+    {% endif %}
   </main>
+
+  <script>
+    const accountSearchInput = document.getElementById("account-search");
+    const accountCards = Array.from(document.querySelectorAll("[data-account-card]"));
+    const accountSearchEmpty = document.getElementById("account-search-empty");
+    const accountSearchStorageKey = `poolCompAccountSearch:{{ account_filter }}`;
+    accountCards.forEach(card => { card.dataset.searchText = card.textContent.toLocaleLowerCase(); });
+    function applyAccountSearch() {
+      const query = accountSearchInput?.value.trim().toLocaleLowerCase() || "";
+      let visible = 0;
+      accountCards.forEach(card => {
+        const matches = !query || card.dataset.searchText.includes(query);
+        card.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      if (accountSearchEmpty) accountSearchEmpty.hidden = !query || visible > 0;
+    }
+    if (accountSearchInput) {
+      try { accountSearchInput.value = accountSearchInput.value || sessionStorage.getItem(accountSearchStorageKey) || ""; } catch (error) {}
+      const keepAccountSearchAtTop = () => accountSearchInput.scrollIntoView({block: "start", inline: "nearest"});
+      accountSearchInput.addEventListener("focus", keepAccountSearchAtTop);
+      accountSearchInput.addEventListener("input", () => {
+        try { sessionStorage.setItem(accountSearchStorageKey, accountSearchInput.value); } catch (error) {}
+        applyAccountSearch();
+        keepAccountSearchAtTop();
+      });
+      applyAccountSearch();
+    }
+    function legacyCopy(value) {
+      const input = document.createElement("textarea");
+      input.value = value;
+      input.setAttribute("readonly", "");
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      let copied = false;
+      try { copied = document.execCommand("copy"); } catch (error) { copied = false; }
+      input.remove();
+      return copied;
+    }
+    async function copyInstagram(button) {
+      const value = button.dataset.copyInstagram || "";
+      if (!value) return;
+      try {
+        let copied = legacyCopy(value);
+        if (!copied && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(value);
+          copied = true;
+        }
+        if (!copied) throw new Error("Clipboard unavailable");
+        const original = button.textContent;
+        button.textContent = "Copied!";
+        window.setTimeout(() => { button.textContent = original; }, 1200);
+      } catch (error) {
+        window.prompt("Copy Instagram handle:", value);
+      }
+    }
+    document.querySelectorAll("[data-copy-instagram]").forEach(button => {
+      button.addEventListener("click", () => copyInstagram(button));
+    });
+  </script>
 </body>
 </html>
