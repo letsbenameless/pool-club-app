@@ -53,8 +53,9 @@
       timeZone: configuredTimeZone, timeZoneName: "short"
     });
     const contributionColours = ["#7CFF7C", "#63B3FF", "#FFD166", "#FF7C9B", "#B794F4", "#4FD1C5", "#FFA94D", "#A3E635"];
+    const configuredExecutiveColours = {{ executive_colours | tojson }};
     const executiveColours = new Map(
-      [...new Set(actionRows.map(row => row.dataset.executive))].sort().map((email, index) => [email, contributionColours[index % contributionColours.length]])
+      [...new Set(actionRows.map(row => row.dataset.executive))].sort().map((email, index) => [email, configuredExecutiveColours[email] || contributionColours[index % contributionColours.length]])
     );
     actionRows.forEach(row => {
       row.querySelector("[data-action-time]").textContent = actionTimeFormatter.format(new Date(parseActionTimestamp(row.dataset.createdAt)));

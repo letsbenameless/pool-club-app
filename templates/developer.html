@@ -146,6 +146,23 @@
     </section>
 
     <section class="card">
+      <h2>Competition tenants</h2>
+      <p>Only this developer account can create a competition. Each competition has an isolated database, accounts, bracket, payments, history, and uploads.</p>
+      <p class="status">Existing: {% for comp in managed_competitions %}{{ comp.name }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      <form method="POST" class="profile-fields" autocomplete="off">
+        <input type="hidden" name="action" value="create_competition">
+        <div class="profile-grid">
+          <label>Competition name<input name="competition_name" maxlength="100" placeholder="UQ Pool Club" required></label>
+          <label>URL name<input name="competition_slug" maxlength="48" pattern="[a-z0-9-]+" placeholder="uq" required></label>
+          <label>First executive name<input name="initial_executive_name" maxlength="120" required></label>
+          <label>First executive email<input name="initial_executive_email" type="email" maxlength="254" required></label>
+          <label>Temporary password<input name="initial_executive_password" type="password" minlength="8" required></label>
+        </div>
+        <div class="actions"><button type="submit">Create Competition</button></div>
+      </form>
+    </section>
+
+    <section class="card">
       <h2>Create a test competition</h2>
       <p>
         Choose how many test players to generate and place into a fresh bracket.

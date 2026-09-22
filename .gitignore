@@ -12,6 +12,7 @@ elo-ratings.csv
 # Keep the assets directory itself, but never commit its contents
 assets/*
 !assets/.gitkeep
+competitions/
 *.uploading
 
 # Python environments and caches

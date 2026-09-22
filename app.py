@@ -1,4 +1,4 @@
-from flask import Flask, Response, render_template, request, redirect, session, send_from_directory, url_for
+from flask import Flask, Response, render_template, request, redirect, session, send_from_directory, url_for, has_request_context
 from memberlist import members as default_members
 from payment_report import (
     build_payment_report_pdf,
@@ -34,6 +34,8 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 DB_FILE = os.path.join(BASE_DIR, "pool_comp.sqlite3")
+COMPETITION_REGISTRY_FILE = os.path.join(BASE_DIR, "competitions.sqlite3")
+COMPETITIONS_DIR = os.path.join(BASE_DIR, "competitions")
 SECRET_KEY_FILE = os.path.join(BASE_DIR, ".flask_secret_key")
 OLD_STATE_FILE = os.path.join(BASE_DIR, "bracket_state.json")
 MEMBERS_FILE = os.path.join(BASE_DIR, "members.json")
@@ -103,6 +105,11 @@ ACTION_TYPE_LABELS = {
     "account_updated": "Account updated", "account_deleted": "Account deleted",
     "message_sent": "Message sent", "members_updated": "Member list updated",
 }
+EXECUTIVE_COLOURS = (
+    "#7CFF7C", "#63B3FF", "#FFD166", "#FF7C9B",
+    "#B794F4", "#4FD1C5", "#FFA94D", "#A3E635",
+)
+EXECUTIVE_PRESENCE_SECONDS = 300
 DEFAULT_PAYOUT_PRESETS = [
     {"player_count": count, "first": prizes[1], "second": prizes[2], "third": prizes[3]}
     for count, prizes in PRESET_WINNINGS.items()
@@ -193,6 +200,106 @@ app.config.update(
 )
 
 
+def clean_competition_slug(value):
+    return re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower()).strip("-")[:48]
+
+
+def init_competition_registry():
+    with closing(sqlite3.connect(COMPETITION_REGISTRY_FILE)) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS competitions (
+                slug TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                database_path TEXT NOT NULL UNIQUE,
+                assets_path TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        conn.execute(
+            """INSERT OR IGNORE INTO competitions
+               (slug, name, database_path, assets_path, created_by)
+               VALUES ('qut', 'QUT Pool Club', ?, ?, 'system migration')""",
+            (DB_FILE, ASSETS_DIR),
+        )
+        conn.commit()
+
+
+def competitions():
+    with closing(sqlite3.connect(COMPETITION_REGISTRY_FILE)) as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(row) for row in conn.execute(
+            "SELECT slug, name FROM competitions ORDER BY name COLLATE NOCASE"
+        )]
+
+
+def competition_record(slug=None):
+    selected = clean_competition_slug(slug or (session.get("competition_slug") if has_request_context() else "qut")) or "qut"
+    with closing(sqlite3.connect(COMPETITION_REGISTRY_FILE)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM competitions WHERE slug = ?", (selected,)).fetchone()
+        return dict(row) if row else None
+
+
+def current_competition_slug():
+    return (competition_record() or {"slug": "qut"})["slug"]
+
+
+def current_assets_dir():
+    record = competition_record()
+    return record["assets_path"] if record else ASSETS_DIR
+
+
+def create_competition(name, slug, executive_email, executive_password, executive_name):
+    clean_name = str(name or "").strip()[:100]
+    clean_slug = clean_competition_slug(slug or clean_name)
+    clean_email = clean_username(executive_email)
+    clean_executive_name = clean_requested_player_name(executive_name)
+    if not clean_name or not clean_slug:
+        return False, "Enter a competition name and URL name."
+    if not clean_email or "@" not in clean_email:
+        return False, "Enter a valid first executive email address."
+    if len(str(executive_password or "")) < 8:
+        return False, "The first executive password must contain at least 8 characters."
+    if not clean_executive_name:
+        return False, "Enter the first executive's name."
+
+    tenant_dir = os.path.abspath(os.path.join(COMPETITIONS_DIR, clean_slug))
+    competitions_root = os.path.abspath(COMPETITIONS_DIR)
+    if os.path.commonpath((tenant_dir, competitions_root)) != competitions_root:
+        return False, "Invalid competition URL name."
+    database_path = os.path.join(tenant_dir, "pool_comp.sqlite3")
+    assets_path = os.path.join(tenant_dir, "assets")
+
+    with closing(sqlite3.connect(COMPETITION_REGISTRY_FILE)) as registry:
+        if registry.execute("SELECT 1 FROM competitions WHERE slug = ?", (clean_slug,)).fetchone():
+            return False, "A competition already uses that URL name."
+
+    os.makedirs(assets_path, exist_ok=True)
+    init_db(database_path)
+    with closing(get_db(database_path)) as tenant_db:
+        tenant_db.execute(
+            """INSERT INTO executive_users
+               (username, password_hash, player_name, executive_role)
+               VALUES (?, ?, ?, 'Executive')""",
+            (clean_email, generate_password_hash(executive_password), clean_executive_name),
+        )
+        tenant_db.commit()
+
+    with closing(sqlite3.connect(COMPETITION_REGISTRY_FILE)) as registry:
+        registry.execute(
+            """INSERT INTO competitions
+               (slug, name, database_path, assets_path, created_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (clean_slug, clean_name, database_path, assets_path, session.get("executive_username", "")),
+        )
+        registry.commit()
+    return True, f"Created {clean_name}. Its first executive can now log in."
+
+
+init_competition_registry()
+
+
 def competition_context_for_date(date_key=None):
     comp_date = clean_date(date_key or most_recent_tuesday_key())
     return {
@@ -206,17 +313,39 @@ def competition_context_for_date(date_key=None):
 
 @app.context_processor
 def inject_competition_context():
+    tenant = competition_record()
     return {
         "competition": competition_context_for_date(),
         "executive_username": session.get("executive_username", ""),
         "executive_player_name": session.get("executive_player_name", ""),
         "executive_role": session.get("executive_role", EXECUTIVE_ROLES[0]),
         "developer_logged_in": is_developer_logged_in(),
+        "current_competition": tenant,
     }
 
 
-def get_db():
-    conn = sqlite3.connect(DB_FILE, timeout=10)
+@app.before_request
+def select_competition_context():
+    requested_slug = clean_competition_slug(
+        request.form.get("competition") or request.args.get("competition")
+    )
+    if not requested_slug:
+        if not session.get("competition_slug"):
+            session["competition_slug"] = "qut"
+        return
+    record = competition_record(requested_slug)
+    if not record:
+        return redirect(url_for("landing", error="Choose a valid competition."))
+    authenticated = session.get("executive_user_id") or session.get("user_account_id")
+    if authenticated and session.get("competition_slug") != requested_slug:
+        return redirect(url_for("landing", error="Log out before switching competitions."))
+    session["competition_slug"] = requested_slug
+
+
+def get_db(database_path=None):
+    record = competition_record()
+    selected_path = database_path or (record["database_path"] if record else DB_FILE)
+    conn = sqlite3.connect(selected_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -224,13 +353,14 @@ def get_db():
     return conn
 
 
-def init_db():
-    with closing(get_db()) as conn:
+def init_db(database_path=None):
+    with closing(get_db(database_path)) as conn:
         ensure_app_state_schema(conn)
         ensure_registration_state_schema(conn)
         ensure_finance_state_schema(conn)
         ensure_bracket_settings_schema(conn)
         ensure_executive_users_schema(conn)
+        ensure_executive_sessions_schema(conn)
         ensure_executive_requests_schema(conn)
         ensure_user_accounts_schema(conn)
         conn.executescript("""
@@ -288,7 +418,10 @@ def init_db():
             );
         """)
         ensure_member_profiles_schema(conn)
-        migrate_known_players_to_profiles(conn)
+        migrate_known_players_to_profiles(
+            conn,
+            include_legacy=database_path is None or os.path.abspath(database_path) == os.path.abspath(DB_FILE),
+        )
         conn.commit()
         conn.execute("""
             INSERT OR IGNORE INTO game_history (
@@ -568,6 +701,21 @@ def competition_is_active():
     )
 
 
+def ensure_executive_sessions_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS executive_sessions (
+            session_token TEXT PRIMARY KEY,
+            executive_user_id INTEGER NOT NULL,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(executive_user_id) REFERENCES executive_users(id) ON DELETE CASCADE
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS executive_sessions_last_seen_idx "
+        "ON executive_sessions(last_seen_at)"
+    )
+
+
 def debt_collections_for_date(comp_date):
     with closing(get_db()) as conn:
         ensure_competition_history_schema(conn)
@@ -733,9 +881,8 @@ def clean_requested_player_name(value):
 
 
 def is_developer_logged_in():
-    account_email = clean_email(session.get("user_email", ""))
     executive_email = clean_email(session.get("executive_username", ""))
-    return account_email in DEVELOPER_EMAILS or executive_email in DEVELOPER_EMAILS
+    return current_competition_slug() == "qut" and executive_email in DEVELOPER_EMAILS
 
 
 def clean_executive_role(role):
@@ -831,7 +978,9 @@ def create_user_account(email, password, player_name="", profile_image="", phone
 
 
 def login_user_account(user):
+    competition_slug = current_competition_slug()
     session.clear()
+    session["competition_slug"] = competition_slug
     session["user_account_id"] = int(user["id"])
     session["user_email"] = user["email"]
 
@@ -1741,12 +1890,48 @@ def mark_executive_login(user_id):
 
 
 def login_executive(user):
+    competition_slug = current_competition_slug()
     session.clear()
+    session["competition_slug"] = competition_slug
+    session["executive_session_token"] = secrets.token_urlsafe(32)
     session["executive_user_id"] = int(user["id"])
     session["executive_username"] = user["username"]
     session["executive_player_name"] = user["player_name"] or ""
     session["executive_role"] = clean_executive_role(user["executive_role"])
     mark_executive_login(user["id"])
+
+
+def touch_executive_session():
+    user_id = session.get("executive_user_id")
+    token = session.get("executive_session_token")
+    if not user_id:
+        return
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["executive_session_token"] = token
+    cutoff = (dt.datetime.utcnow() - dt.timedelta(seconds=EXECUTIVE_PRESENCE_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+    with closing(get_db()) as conn:
+        ensure_executive_sessions_schema(conn)
+        conn.execute("DELETE FROM executive_sessions WHERE last_seen_at < ?", (cutoff,))
+        conn.execute(
+            """INSERT INTO executive_sessions (session_token, executive_user_id, last_seen_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(session_token) DO UPDATE SET
+                   executive_user_id = excluded.executive_user_id,
+                   last_seen_at = CURRENT_TIMESTAMP""",
+            (token, int(user_id)),
+        )
+        conn.commit()
+
+
+def remove_executive_session():
+    token = session.get("executive_session_token")
+    if not token:
+        return
+    with closing(get_db()) as conn:
+        ensure_executive_sessions_schema(conn)
+        conn.execute("DELETE FROM executive_sessions WHERE session_token = ?", (token,))
+        conn.commit()
 
 
 @app.before_request
@@ -1765,6 +1950,11 @@ def refresh_approved_executive_session():
         login_executive(executive)
 
 
+@app.before_request
+def refresh_executive_presence():
+    touch_executive_session()
+
+
 def is_executive_logged_in():
     return bool(session.get("executive_user_id"))
 
@@ -1773,23 +1963,37 @@ def current_executive_user():
     return get_executive_user_by_id(session.get("executive_user_id"))
 
 
-def executive_profiles():
+def executive_profiles(active_only=False):
     with closing(get_db()) as conn:
         ensure_executive_users_schema(conn)
-        rows = conn.execute(
-            """
+        ensure_executive_sessions_schema(conn)
+        ensure_action_log_schema(conn)
+        cutoff = (dt.datetime.utcnow() - dt.timedelta(seconds=EXECUTIVE_PRESENCE_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
+        active_clause = """AND EXISTS (
+            SELECT 1 FROM executive_sessions s
+            WHERE s.executive_user_id = executive_users.id AND s.last_seen_at >= ?
+        )""" if active_only else ""
+        parameters = (cutoff,) if active_only else ()
+        rows = conn.execute(f"""
             SELECT username, player_name, executive_role
             FROM executive_users
-            WHERE player_name != ''
+            WHERE player_name != '' {active_clause}
             ORDER BY player_name COLLATE NOCASE, username COLLATE NOCASE
-            """
-        ).fetchall()
+        """, parameters).fetchall()
+        colour_emails = sorted({row["username"] for row in conn.execute(
+            "SELECT username FROM executive_users UNION SELECT executive_email FROM executive_action_log"
+        ).fetchall()}, key=str.casefold)
+        colours = {
+            email: EXECUTIVE_COLOURS[index % len(EXECUTIVE_COLOURS)]
+            for index, email in enumerate(colour_emails)
+        }
 
     return [
         {
             "username": row["username"],
             "player_name": row["player_name"],
             "role": clean_executive_role(row["executive_role"]),
+            "colour": colours.get(row["username"], EXECUTIVE_COLOURS[0]),
         }
         for row in rows
     ]
@@ -2342,15 +2546,16 @@ def ensure_member_profiles_schema(conn):
     )
 
 
-def migrate_known_players_to_profiles(conn):
+def migrate_known_players_to_profiles(conn, include_legacy=None):
     migration_name = "known_players_json_to_member_profiles_v1"
     if conn.execute(
         "SELECT 1 FROM data_migrations WHERE name = ?", (migration_name,)
     ).fetchone():
         return
 
-    members = legacy_name_list(MEMBERS_FILE, default_members)
-    known_players = legacy_name_list(KNOWN_PLAYERS_FILE)
+    is_qut = current_competition_slug() == "qut" if include_legacy is None else include_legacy
+    members = legacy_name_list(MEMBERS_FILE, default_members) if is_qut else []
+    known_players = legacy_name_list(KNOWN_PLAYERS_FILE) if is_qut else []
     member_keys = {name.casefold() for name in members}
     seen = set()
     for value in members + known_players:
@@ -2574,7 +2779,7 @@ def load_state():
         })
 
     # One-time migration from the old JSON save file, if it exists.
-    if os.path.exists(OLD_STATE_FILE):
+    if current_competition_slug() == "qut" and os.path.exists(OLD_STATE_FILE):
         try:
             with open(OLD_STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
@@ -2604,8 +2809,9 @@ def clean_logo_filename(value):
 
 def available_competition_logos():
     logos = []
+    assets_dir = current_assets_dir()
     try:
-        filenames = os.listdir(ASSETS_DIR)
+        filenames = os.listdir(assets_dir)
     except OSError:
         filenames = []
 
@@ -2614,7 +2820,7 @@ def available_competition_logos():
         if clean_filename != filename:
             continue
 
-        path = os.path.join(ASSETS_DIR, filename)
+        path = os.path.join(assets_dir, filename)
         if not os.path.isfile(path):
             continue
 
@@ -2644,7 +2850,7 @@ def competition_logo_exists(filename):
     clean_filename = clean_logo_filename(filename)
     return (
         clean_filename == filename
-        and os.path.isfile(os.path.join(ASSETS_DIR, clean_filename))
+        and os.path.isfile(os.path.join(current_assets_dir(), clean_filename))
     )
 
 
@@ -2667,7 +2873,9 @@ def save_competition_logo(upload):
     # Use a new filename for every upload. On Windows, OneDrive or a browser
     # request can briefly hold the current image open and prevent os.replace.
     filename = f"competition-logo-{secrets.token_hex(8)}.{extension}"
-    destination = os.path.join(ASSETS_DIR, filename)
+    assets_dir = current_assets_dir()
+    os.makedirs(assets_dir, exist_ok=True)
+    destination = os.path.join(assets_dir, filename)
     try:
         with open(destination, "xb") as output:
             output.write(data)
@@ -2836,7 +3044,7 @@ def save_member_profile_image(upload):
     if not extension:
         return False, "Upload a PNG, JPEG, WebP, or GIF image."
 
-    directory = os.path.join(ASSETS_DIR, "member-profiles")
+    directory = os.path.join(current_assets_dir(), "member-profiles")
     filename = f"member-profile-{secrets.token_hex(8)}.{extension}"
     try:
         os.makedirs(directory, exist_ok=True)
@@ -5640,6 +5848,8 @@ def delete_first_round_player_in_state(state, match_id, slot_id):
 def landing():
     return render_template(
         "landing.html",
+        competitions=competitions(),
+        selected_competition=current_competition_slug(),
         message=request.args.get("message", ""),
         error=request.args.get("error", ""),
     )
@@ -5685,7 +5895,7 @@ def guest_registrations():
 
 @app.route("/assets/<path:filename>")
 def asset_file(filename):
-    return send_from_directory(ASSETS_DIR, filename)
+    return send_from_directory(current_assets_dir(), filename)
 
 
 @app.route("/bracket_qr.svg")
@@ -5761,6 +5971,7 @@ def user_login():
 
     return redirect(url_for(
         "landing",
+        competition=current_competition_slug(),
         error="Email, phone number, or password is incorrect."
     ))
 
@@ -5962,6 +6173,7 @@ def executive_login():
 
 @app.route("/executive_logout", methods=["POST"])
 def executive_logout():
+    remove_executive_session()
     session.clear()
     return redirect(url_for("landing"))
 
@@ -6008,7 +6220,7 @@ def executive_requests_route():
             elif not message_body:
                 result = "Enter a message."
             elif channel == "email":
-                subject = str(request.form.get("subject", "")).strip()[:160] or "Message from QUT Pool Club"
+                subject = str(request.form.get("subject", "")).strip()[:160] or f"Message from {competition_record()['name']}"
                 success = send_email([account.get("email", "")], subject, message_body)
                 result = "Email sent." if success else "Email could not be sent. Check the SMTP configuration."
             elif channel == "sms":
@@ -6169,8 +6381,14 @@ def executive_games():
             "visible": len(games),
         },
         bracket_version=state.get("_version", 0),
-        executive_profiles=executive_profiles(),
+        executive_profiles=executive_profiles(active_only=True),
     )
+
+
+@app.route("/executive_presence")
+@executive_login_required
+def executive_presence():
+    return {"members": executive_profiles(active_only=True)}
 
 
 @app.route("/registration_requests", methods=["GET", "POST"])
@@ -6667,6 +6885,19 @@ def developer_page():
             save_registration_state({field: "" for field in REGISTRATION_FIELDS})
             message = f"A fresh competition with {player_count} test players has been created."
 
+    elif request.method == "POST" and request.form.get("action") == "create_competition":
+        success, result = create_competition(
+            request.form.get("competition_name", ""),
+            request.form.get("competition_slug", ""),
+            request.form.get("initial_executive_email", ""),
+            request.form.get("initial_executive_password", ""),
+            request.form.get("initial_executive_name", ""),
+        )
+        if success:
+            message = result
+        else:
+            error = result
+
     elif request.method == "POST" and request.form.get("action") == "save_member_profile":
         current_profile = load_member_profile(selected_member)
         profile_image = current_profile.get("profile_image", "")
@@ -6705,6 +6936,7 @@ def developer_page():
         members=members,
         selected_member=selected_member,
         member_profile=member_profile,
+        managed_competitions=competitions(),
     )
 
 
@@ -6788,6 +7020,14 @@ def executive_actions():
     executive = request.args.get("executive", "")
     search = request.args.get("search", "").strip()
     actions, executives = load_executive_actions()
+    colour_emails = sorted({
+        *(item["executive_email"] for item in executives),
+        *(profile["username"] for profile in executive_profiles()),
+    }, key=str.casefold)
+    executive_colours = {
+        email: EXECUTIVE_COLOURS[index % len(EXECUTIVE_COLOURS)]
+        for index, email in enumerate(colour_emails)
+    }
     display_settings = load_bracket_settings()
     return render_template(
         "actions.html",
@@ -6799,6 +7039,7 @@ def executive_actions():
         search=search,
         timezone=display_settings["timezone"],
         competition_end_time=display_settings["competition_end_time"],
+        executive_colours=executive_colours,
     )
 
 

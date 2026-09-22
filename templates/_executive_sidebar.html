@@ -1,7 +1,7 @@
 <button class="sidebar-edge-handle" type="button" aria-label="Open navigation" aria-controls="executive-sidebar">Menu</button>
 <div class="sidebar-overlay" data-sidebar-close></div>
 <aside class="executive-sidebar" id="executive-sidebar">
-  <div class="sidebar-title">{{ 'Executive' if executive_username else 'Account' }}</div>
+  <div class="sidebar-title">{{ current_competition.name }} · {{ 'Executive' if executive_username else 'Account' }}</div>
   <nav aria-label="Executive pages">
     {% if executive_username %}
       <a class="{% if request.endpoint == 'register' %}active{% endif %}" href="{{ url_for('register') }}">Register Players</a>
@@ -84,6 +84,10 @@
 </style>
 <script>
   (() => {
+    {% if executive_username %}
+    const presenceUrl = {{ url_for('executive_presence') | tojson }};
+    window.setInterval(() => fetch(presenceUrl, {cache: "no-store"}).catch(() => {}), 60000);
+    {% endif %}
     const sidebar = document.getElementById("executive-sidebar");
     const handle = document.querySelector(".sidebar-edge-handle");
     const overlay = document.querySelector("[data-sidebar-close]");

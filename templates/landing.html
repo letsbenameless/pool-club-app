@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>QUT Pool App Login</title>
+  <title>Pool Competition Login</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
@@ -96,6 +96,22 @@
       gap: 8px;
     }
 
+    details {
+      margin-top: 10px;
+      border: 1px solid #3b3b3b;
+      border-radius: 7px;
+      background: #141414;
+      overflow: hidden;
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 13px;
+      font-weight: bold;
+    }
+
+    details form { padding: 0 13px 13px; }
+
     .message {
       margin: 0 0 12px;
       border: 1px solid #555;
@@ -139,7 +155,7 @@
 </head>
 <body>
   <main>
-    <h1>QUT Pool App</h1>
+    <h1>Pool Competition Login</h1>
 
     {% if error %}
       <p class="message error">{{ error }}</p>
@@ -148,26 +164,23 @@
       <p class="message">{{ message }}</p>
     {% endif %}
 
-    <form method="POST" action="{{ url_for('user_login') }}" autocomplete="off">
-      <label>
-        Email or phone number
-        <input name="identifier" type="text" autocomplete="username" required autofocus>
-      </label>
-
-      <label>
-        Password
-        <input name="password" type="password" autocomplete="current-password" required>
-      </label>
-
-      <div class="login-row">
-        <a class="secondary" href="{{ url_for('guest_registrations') }}">Continue As Guest</a>
-        <button type="submit">Log In</button>
-      </div>
-    </form>
-
-    <div class="actions" style="margin-top: 12px;">
-      <a class="quiet" href="{{ url_for('user_signup') }}">Create Account</a>
-    </div>
+    {% for comp in competitions %}
+      <details {% if competitions|length == 1 or comp.slug == selected_competition %}open{% endif %}>
+        <summary>{{ comp.name }}</summary>
+        <form method="POST" action="{{ url_for('user_login') }}" autocomplete="off">
+          <input type="hidden" name="competition" value="{{ comp.slug }}">
+          <label>Email or phone number<input name="identifier" type="text" autocomplete="username" required></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+          <div class="login-row">
+            <a class="secondary" href="{{ url_for('guest_registrations', competition=comp.slug) }}">Continue As Guest</a>
+            <button type="submit">Log In</button>
+          </div>
+          <div class="actions">
+            <a class="quiet" href="{{ url_for('user_signup', competition=comp.slug) }}">Create Account</a>
+          </div>
+        </form>
+      </details>
+    {% endfor %}
   </main>
   <script>
     const initialViewportHeight = window.visualViewport?.height || window.innerHeight;

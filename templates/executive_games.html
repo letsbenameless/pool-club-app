@@ -155,7 +155,7 @@
     }
 
     .executive-badge {
-      border: 1px solid #333;
+      border: 1px solid var(--executive-colour, #333);
       border-radius: 6px;
       background: #181818;
       padding: 7px 9px;
@@ -165,7 +165,7 @@
     }
 
     .executive-badge span {
-      color: #7CFF7C;
+      color: var(--executive-colour, #7CFF7C);
     }
 
     .filters {
@@ -851,15 +851,13 @@
   </header>
 
   <main>
-    {% if executive_profiles %}
-      <div class="executive-roster" aria-label="Executives">
+      <div class="executive-roster" id="executive-roster" aria-label="Members currently logged in" {% if not executive_profiles %}hidden{% endif %}>
         {% for profile in executive_profiles %}
-          <div class="executive-badge">
+          <div class="executive-badge" style="--executive-colour: {{ profile.colour }}">
             {{ profile.player_name }} <span>{{ profile.role }}</span>
           </div>
         {% endfor %}
       </div>
-    {% endif %}
 
     <div class="game-toolbar">
       <nav class="filters" aria-label="Game filters">
@@ -1058,6 +1056,8 @@
   <script>
     const initialBracketVersion = {{ bracket_version | tojson }};
     const stateUrl = {{ url_for("bracket_state_route") | tojson }};
+    const executivePresenceUrl = {{ url_for("executive_presence") | tojson }};
+    const executiveRoster = document.getElementById("executive-roster");
     const gameSearchInput = document.getElementById("game-search");
     const gameSearchEmpty = document.getElementById("game-search-empty");
     const gameSearchStorageKey = "poolCompExecutiveGameSearch";
@@ -1445,7 +1445,29 @@
       }
     }
 
+    async function refreshExecutivePresence() {
+      try {
+        const response = await fetch(executivePresenceUrl, {cache: "no-store"});
+        if (!response.ok) return;
+        const {members = []} = await response.json();
+        executiveRoster.replaceChildren(...members.map(member => {
+          const badge = document.createElement("div");
+          badge.className = "executive-badge";
+          badge.style.setProperty("--executive-colour", member.colour);
+          badge.append(document.createTextNode(`${member.player_name} `));
+          const role = document.createElement("span");
+          role.textContent = member.role;
+          badge.append(role);
+          return badge;
+        }));
+        executiveRoster.hidden = members.length === 0;
+      } catch (error) {
+        // Leave the last known presence list visible during brief server hiccups.
+      }
+    }
+
     window.setInterval(pollBracketVersion, 1500);
+    window.setInterval(refreshExecutivePresence, 5000);
   </script>
 </body>
 </html>
